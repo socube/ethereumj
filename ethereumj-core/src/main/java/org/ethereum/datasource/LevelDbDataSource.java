@@ -77,16 +77,17 @@ public class LevelDbDataSource implements KeyValueDataSource {
                 if (!Files.isSymbolicLink(dbPath.getParent())) Files.createDirectories(dbPath.getParent());
 
                 logger.debug("Initializing new or existing database: '{}'", name);
-                try {
-                    db = factory.open(dbPath.toFile(), options);
-                } catch (IOException e) {
-                    // database must be corrupted
-                    logger.warn("Problem initializing database.", e);
-                    logger.info("LevelDB database must be corrupted. Trying to repair. Could take some time.");
-                    factory.repair(dbPath.toFile(), options);
-                    logger.info("Repair finished. Opening database again.");
-                    db = factory.open(dbPath.toFile(), options);
-                }
+                db = factory.open(dbPath.toFile(), options);
+//                try {
+//                    db = factory.open(dbPath.toFile(), options);
+//                } catch (IOException e) {
+//                    // database must be corrupted
+//                    logger.warn("Problem initializing database.", e);
+//                    logger.info("LevelDB database must be corrupted. Trying to repair. Could take some time.");
+//                    factory.repair(dbPath.toFile(), options);
+//                    logger.info("Repair finished. Opening database again.");
+//                    db = factory.open(dbPath.toFile(), options);
+//                }
 
                 alive = true;
             } catch (IOException ioe) {

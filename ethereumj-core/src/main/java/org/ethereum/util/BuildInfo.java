@@ -20,12 +20,12 @@ public class BuildInfo {
             Properties props = new Properties();
             InputStream is = BuildInfo.class.getResourceAsStream("/build-info.properties");
 
-                props.load(is);
-
-                buildHash = props.getProperty("build.hash");
-                buildTime = props.getProperty("build.time");
-                buildBranch = props.getProperty("build.branch");
-        } catch (IOException e) {
+//                props.load(is);
+//
+//                buildHash = props.getProperty("build.hash");
+//                buildTime = props.getProperty("build.time");
+//                buildBranch = props.getProperty("build.branch");
+        } catch (Throwable e) {
             logger.error("Error reading /build-info.properties", e);
         }
     }
