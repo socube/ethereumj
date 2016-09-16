@@ -19,7 +19,7 @@ while [  $COUNTER -gt 0 ]; do
 	echo "[SCRIPT] Spawning writter"
 	java -Xmx4g -cp ethereumj-core/build/libs/ethereumj-core-1.4.0-SNAPSHOT-all.jar org.ethereum.db.TestLongBatchApplication & pid=$!
 
-	SECS=$(( ( RANDOM % 10 )  + 25 ))
+	SECS=$(( ( RANDOM % 10 )  + 30 ))
 	# in the background, sleep for 10 secs then kill that process
 	echo "[SCRIPT] Sleep for $SECS seconds and then kill process"
 	(sleep $SECS && echo "[SCRIPT] Killed batch after $SECS seconds" && kill -9 $pid)

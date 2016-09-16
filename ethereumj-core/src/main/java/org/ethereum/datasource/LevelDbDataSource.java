@@ -197,14 +197,22 @@ public class LevelDbDataSource implements KeyValueDataSource {
     }
 
     private void updateBatchInternal(Map<byte[], byte[]> rows) throws IOException {
+        int putCount = 0;
+        int deleteCount = 0;
+
         try (WriteBatch batch = db.createWriteBatch()) {
             for (Map.Entry<byte[], byte[]> entry : rows.entrySet()) {
                 if (entry.getValue() == null) {
                     batch.delete(entry.getKey());
+                    deleteCount++;
                 } else {
                     batch.put(entry.getKey(), entry.getValue());
+                    putCount++;
                 }
             }
+
+            System.out.println("updateBatchInternal puts:" + putCount + ", deletes:" + deleteCount);
+
             db.write(batch);
         }
     }
