@@ -1,4 +1,6 @@
-# create shalowJar first
+#!/usr/bin/env bash
+
+# create shadowJar first
 # ./gradlew shadowJar
 
 COUNTER=1
