@@ -1,17 +1,31 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.lang3.tuple.Triple;
-import org.ethereum.config.CommonConfig;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.config.blockchain.FrontierConfig;
 import org.ethereum.config.net.MainNetConfig;
 import org.ethereum.crypto.ECKey;
 import org.ethereum.db.ByteArrayWrapper;
-import org.ethereum.db.IndexedBlockStore;
 import org.ethereum.listener.EthereumListener;
 import org.ethereum.listener.EthereumListenerAdapter;
-import org.ethereum.util.blockchain.SolidityCallResult;
 import org.ethereum.util.blockchain.SolidityContract;
 import org.ethereum.util.blockchain.StandaloneBlockchain;
 import org.junit.*;
@@ -20,13 +34,14 @@ import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.ethereum.listener.EthereumListener.PendingTransactionState.*;
-import static org.ethereum.util.BIUtil.toBI;
 import static org.ethereum.util.blockchain.EtherUtil.Unit.ETHER;
 import static org.ethereum.util.blockchain.EtherUtil.convert;
 
@@ -38,17 +53,12 @@ public class PendingStateTest {
 
     @BeforeClass
     public static void setup() {
-        SystemProperties.getDefault().setBlockchainConfig(new FrontierConfig(new FrontierConfig.FrontierConstants() {
-            @Override
-            public BigInteger getMINIMUM_DIFFICULTY() {
-                return BigInteger.ONE;
-            }
-        }));
+        SystemProperties.getDefault().setBlockchainConfig(StandaloneBlockchain.getEasyMiningConfig());
     }
 
     @AfterClass
     public static void cleanup() {
-        SystemProperties.getDefault().setBlockchainConfig(MainNetConfig.INSTANCE);
+        SystemProperties.resetToDefault();
     }
 
     static class PendingListener extends EthereumListenerAdapter {
@@ -607,5 +617,33 @@ public class PendingStateTest {
 
         Assert.assertEquals(l.pollTxUpdateState(tx1), DROPPED);
         Assert.assertTrue(l.getQueueFor(tx1).isEmpty());
+    }
+
+    @Test
+    public void testInvalidTransaction() throws InterruptedException {
+        StandaloneBlockchain bc = new StandaloneBlockchain();
+        final CountDownLatch txHandle = new CountDownLatch(1);
+        PendingListener l = new PendingListener() {
+            @Override
+            public void onPendingTransactionUpdate(TransactionReceipt txReceipt, PendingTransactionState state, Block block) {
+                assert !txReceipt.isSuccessful();
+                assert txReceipt.getError().toLowerCase().contains("invalid");
+                assert txReceipt.getError().toLowerCase().contains("receive address");
+                txHandle.countDown();
+            }
+        };
+        bc.addEthereumListener(l);
+        PendingStateImpl pendingState = (PendingStateImpl) bc.getBlockchain().getPendingState();
+
+        ECKey alice = new ECKey();
+        Random rnd = new Random();
+        Block b1 = bc.createBlock();
+        byte[] b = new byte[21];
+        rnd.nextBytes(b);
+
+        Transaction tx1 = bc.createTransaction(alice, 0, b, BigInteger.ONE, new byte[0]);
+        pendingState.addPendingTransaction(tx1);
+
+        assert txHandle.await(3, TimeUnit.SECONDS);
     }
 }

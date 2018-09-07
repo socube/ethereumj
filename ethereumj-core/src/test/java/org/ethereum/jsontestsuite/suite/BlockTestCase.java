@@ -1,5 +1,25 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.jsontestsuite.suite;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import org.ethereum.config.BlockchainNetConfig;
+import org.ethereum.jsontestsuite.GitHubJSONTestSuite;
 import org.ethereum.jsontestsuite.suite.model.AccountTck;
 import org.ethereum.jsontestsuite.suite.model.BlockHeaderTck;
 import org.ethereum.jsontestsuite.suite.model.BlockTck;
@@ -7,6 +27,7 @@ import org.ethereum.jsontestsuite.suite.model.BlockTck;
 import java.util.List;
 import java.util.Map;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class BlockTestCase {
 
     private String acomment;
@@ -17,6 +38,7 @@ public class BlockTestCase {
     private Map<String, AccountTck> postState;
     private String lastblockhash;
     private int noBlockChainHistory;
+    private GitHubJSONTestSuite.Network network;
 
     public BlockTestCase() {
     }
@@ -79,6 +101,18 @@ public class BlockTestCase {
 
     public void setAcomment(String acomment) {
         this.acomment = acomment;
+    }
+
+    public GitHubJSONTestSuite.Network getNetwork() {
+        return network;
+    }
+
+    public void setNetwork(GitHubJSONTestSuite.Network network) {
+        this.network = network;
+    }
+
+    public BlockchainNetConfig getConfig() {
+        return network.getConfig();
     }
 
     @Override

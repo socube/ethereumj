@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.server;
 
 import io.netty.buffer.ByteBuf;
@@ -32,6 +49,7 @@ import org.ethereum.net.shh.ShhHandler;
 import org.ethereum.net.shh.ShhMessageFactory;
 import org.ethereum.net.swarm.bzz.BzzHandler;
 import org.ethereum.net.swarm.bzz.BzzMessageFactory;
+import org.ethereum.util.CollectionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -84,6 +102,9 @@ public class Channel {
     @Autowired
     private StaticMessages staticMessages;
 
+    @Autowired
+    private WireTrafficStats stats;
+
     private ChannelManager channelManager;
 
     private Eth eth = new EthAdapter();
@@ -97,15 +118,21 @@ public class Channel {
     private boolean isActive;
     private boolean isDisconnected;
 
+    private String remoteId;
+
     private PeerStatistics peerStats = new PeerStatistics();
+
+    public static final int MAX_SAFE_TXS = 192;
 
     public void init(ChannelPipeline pipeline, String remoteId, boolean discoveryMode, ChannelManager channelManager) {
         this.channelManager = channelManager;
+        this.remoteId = remoteId;
 
         isActive = remoteId != null && !remoteId.isEmpty();
 
         pipeline.addLast("readTimeoutHandler",
                 new ReadTimeoutHandler(config.peerChannelReadTimeout(), TimeUnit.SECONDS));
+        pipeline.addLast(stats.tcp);
         pipeline.addLast("handshakeHandler", handshakeHandler);
 
         this.discoveryMode = discoveryMode;
@@ -136,40 +163,37 @@ public class Channel {
                                             HelloMessage helloRemote) throws IOException, InterruptedException {
 
         logger.debug("publicRLPxHandshakeFinished with " + ctx.channel().remoteAddress());
-        if (P2pHandler.isProtocolVersionSupported(helloRemote.getP2PVersion())) {
 
-            if (helloRemote.getP2PVersion() < 5) {
-                messageCodec.setSupportChunkedFrames(false);
-            }
+        messageCodec.setSupportChunkedFrames(false);
 
-            FrameCodecHandler frameCodecHandler = new FrameCodecHandler(frameCodec, this);
-            ctx.pipeline().addLast("medianFrameCodec", frameCodecHandler);
-            ctx.pipeline().addLast("messageCodec", messageCodec);
-            ctx.pipeline().addLast(Capability.P2P, p2pHandler);
+        FrameCodecHandler frameCodecHandler = new FrameCodecHandler(frameCodec, this);
+        ctx.pipeline().addLast("medianFrameCodec", frameCodecHandler);
 
-            p2pHandler.setChannel(this);
-            p2pHandler.setHandshake(helloRemote, ctx);
-
-            getNodeStatistics().rlpxHandshake.add();
+        if (SnappyCodec.isSupported(Math.min(config.defaultP2PVersion(), helloRemote.getP2PVersion()))) {
+            ctx.pipeline().addLast("snappyCodec", new SnappyCodec(this));
+            logger.debug("{}: use snappy compression", ctx.channel());
         }
+
+        ctx.pipeline().addLast("messageCodec", messageCodec);
+        ctx.pipeline().addLast(Capability.P2P, p2pHandler);
+
+        p2pHandler.setChannel(this);
+        p2pHandler.setHandshake(helloRemote, ctx);
+
+        getNodeStatistics().rlpxHandshake.add();
     }
 
-    public void sendHelloMessage(ChannelHandlerContext ctx, FrameCodec frameCodec, String nodeId,
-                                 HelloMessage inboundHelloMessage) throws IOException, InterruptedException {
+    public void sendHelloMessage(ChannelHandlerContext ctx, FrameCodec frameCodec,
+                                 String nodeId) throws IOException, InterruptedException {
 
         final HelloMessage helloMessage = staticMessages.createHelloMessage(nodeId);
-
-        if (inboundHelloMessage != null && P2pHandler.isProtocolVersionSupported(inboundHelloMessage.getP2PVersion())) {
-            // the p2p version can be downgraded if requested by peer and supported by us
-            helloMessage.setP2pVersion(inboundHelloMessage.getP2PVersion());
-        }
 
         ByteBuf byteBufMsg = ctx.alloc().buffer();
         frameCodec.writeFrame(new FrameCodec.Frame(helloMessage.getCode(), helloMessage.getEncoded()), byteBufMsg);
         ctx.writeAndFlush(byteBufMsg).sync();
 
         if (logger.isDebugEnabled())
-            logger.debug("To: \t{} \tSend: \t{}", ctx.channel().remoteAddress(), helloMessage);
+            logger.debug("To:   {}    Send:  {}", ctx.channel().remoteAddress(), helloMessage);
         getNodeStatistics().rlpxOutHello.add();
     }
 
@@ -270,7 +294,8 @@ public class Channel {
     }
 
     public String getPeerIdShort() {
-        return node == null ? "<null>" : node.getHexIdShort();
+        return node == null ? (remoteId != null && remoteId.length() >= 8 ? remoteId.substring(0,8) :remoteId)
+                : node.getHexIdShort();
     }
 
     public byte[] getNodeId() {
@@ -289,6 +314,7 @@ public class Channel {
     }
 
     public void disconnect(ReasonCode reason) {
+        getNodeStatistics().nodeDisconnectedLocal(reason);
         msgQueue.disconnect(reason);
     }
 
@@ -350,8 +376,28 @@ public class Channel {
         eth.disableTransactions();
     }
 
-    public void sendTransaction(List<Transaction> tx) {
-        eth.sendTransaction(tx);
+    /**
+     * Send transactions from input to peer corresponded with channel
+     * Using {@link #sendTransactionsCapped(List)} is recommended instead
+     * @param txs   Transactions
+     */
+    public void sendTransactions(List<Transaction> txs) {
+        eth.sendTransaction(txs);
+    }
+
+    /**
+     * Sames as {@link #sendTransactions(List)} but input list is randomly sliced to
+     * contain not more than {@link #MAX_SAFE_TXS} if needed
+     * @param txs   List of txs to send
+     */
+    public void sendTransactionsCapped(List<Transaction> txs) {
+        List<Transaction> slicedTxs;
+        if (txs.size() <= MAX_SAFE_TXS) {
+            slicedTxs = txs;
+        } else {
+            slicedTxs = CollectionUtils.truncateRand(txs, MAX_SAFE_TXS);
+        }
+        eth.sendTransaction(slicedTxs);
     }
 
     public void sendNewBlock(Block block) {
@@ -381,9 +427,10 @@ public class Channel {
 
         Channel channel = (Channel) o;
 
-        if (inetSocketAddress != null ? !inetSocketAddress.equals(channel.inetSocketAddress) : channel.inetSocketAddress != null) return false;
-        return !(node != null ? !node.equals(channel.node) : channel.node != null);
 
+        if (inetSocketAddress != null ? !inetSocketAddress.equals(channel.inetSocketAddress) : channel.inetSocketAddress != null) return false;
+        if (node != null ? !node.equals(channel.node) : channel.node != null) return false;
+        return false;
     }
 
     @Override

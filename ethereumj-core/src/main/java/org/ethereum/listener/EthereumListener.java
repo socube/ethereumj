@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.listener;
 
 import org.ethereum.core.*;
@@ -6,10 +23,8 @@ import org.ethereum.net.message.Message;
 import org.ethereum.net.p2p.HelloMessage;
 import org.ethereum.net.rlpx.Node;
 import org.ethereum.net.server.Channel;
-import org.ethereum.vm.program.InternalTransaction;
 
 import java.util.List;
-import java.util.Set;
 
 /**
  * @author Roman Mandeleil
@@ -57,6 +72,31 @@ public interface EthereumListener {
         }
     }
 
+    enum SyncState {
+        /**
+         * When doing fast sync UNSECURE sync means that the full state is downloaded,
+         * chain is on the latest block, and blockchain operations may be executed
+         * (such as state querying, transaction submission)
+         * but the state isn't yet confirmed with  the whole block chain and can't be
+         * trusted.
+         * At this stage historical blocks and receipts are unavailable yet
+         */
+        UNSECURE,
+        /**
+         * When doing fast sync SECURE sync means that the full state is downloaded,
+         * chain is on the latest block, and blockchain operations may be executed
+         * (such as state querying, transaction submission)
+         * The state is now confirmed by the full chain (all block headers are
+         * downloaded and verified) and can be trusted
+         * At this stage historical blocks and receipts are unavailable yet
+         */
+        SECURE,
+        /**
+         * Sync is fully complete. All blocks and receipts are downloaded.
+         */
+        COMPLETE
+    }
+
     void trace(String output);
 
     void onNodeDiscovered(Node node);
@@ -70,6 +110,10 @@ public interface EthereumListener {
     void onSendMessage(Channel channel, Message message);
 
     void onBlock(BlockSummary blockSummary);
+
+    default void onBlock(BlockSummary blockSummary, boolean best) {
+        onBlock(blockSummary);
+    }
 
     void onPeerDisconnect(String host, long port);
 
@@ -97,7 +141,7 @@ public interface EthereumListener {
      */
     void onPendingTransactionUpdate(TransactionReceipt txReceipt, PendingTransactionState state, Block block);
 
-    void onSyncDone();
+    void onSyncDone(SyncState state);
 
     void onNoConnections();
 

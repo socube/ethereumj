@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.handler;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -15,13 +32,13 @@ import org.ethereum.net.rlpx.discover.NodeManager;
 import org.ethereum.net.submit.TransactionExecutor;
 import org.ethereum.net.submit.TransactionTask;
 import org.ethereum.sync.SyncManager;
-import org.ethereum.sync.SyncState;
+import org.ethereum.sync.PeerState;
 import org.ethereum.sync.SyncStatistics;
 import org.ethereum.util.ByteUtil;
-import org.ethereum.util.FastByteComparisons;
+import org.ethereum.validator.BlockHeaderRule;
+import org.ethereum.validator.BlockHeaderValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
@@ -29,15 +46,16 @@ import org.springframework.stereotype.Component;
 import javax.annotation.Nullable;
 import java.math.BigInteger;
 import java.util.*;
-import java.util.concurrent.LinkedBlockingQueue;
 
 import static java.lang.Math.min;
 import static java.util.Collections.singletonList;
+import static org.ethereum.datasource.MemSizeEstimator.ByteArrayEstimator;
 import static org.ethereum.net.eth.EthVersion.V62;
 import static org.ethereum.net.message.ReasonCode.USELESS_PEER;
-import static org.ethereum.sync.SyncState.*;
-import static org.ethereum.sync.SyncState.BLOCK_RETRIEVING;
-import static org.spongycastle.util.encoders.Hex.toHexString;
+import static org.ethereum.sync.PeerState.*;
+import static org.ethereum.sync.PeerState.BLOCK_RETRIEVING;
+import static org.ethereum.util.Utils.longToTimePeriod;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Eth 62
@@ -49,7 +67,9 @@ import static org.spongycastle.util.encoders.Hex.toHexString;
 @Scope("prototype")
 public class Eth62 extends EthHandler {
 
-    protected static final int MAX_HASHES_TO_SEND = 65536;
+    protected static final int MAX_HASHES_TO_SEND = 1024;
+
+    public static final int MAX_MESSAGE_SIZE = 32 * 1024 * 1024;
 
     protected final static Logger logger = LoggerFactory.getLogger("sync");
     protected final static Logger loggerNet = LoggerFactory.getLogger("net");
@@ -68,7 +88,7 @@ public class Eth62 extends EthHandler {
 
     protected EthState ethState = EthState.INIT;
 
-    protected SyncState syncState = IDLE;
+    protected PeerState peerState = IDLE;
     protected boolean syncDone = false;
 
     /**
@@ -88,9 +108,12 @@ public class Eth62 extends EthHandler {
 
     protected final SyncStatistics syncStats = new SyncStatistics();
 
-    protected Queue<GetBlockHeadersMessageWrapper> headerRequests = new LinkedBlockingQueue<>();
+    protected GetBlockHeadersMessageWrapper headerRequest;
 
-    private Map<Long, byte[]> blockHashCheck;
+    private Map<Long, BlockHeaderValidator> validatorMap;
+    protected long lastReqSentTime;
+    protected long connectedTime = System.currentTimeMillis();
+    protected long processingTime = 0;
 
     private static final EthVersion version = V62;
 
@@ -104,14 +127,14 @@ public class Eth62 extends EthHandler {
 
     @Autowired
     public Eth62(final SystemProperties config, final Blockchain blockchain,
-                 final CompositeEthereumListener ethereumListener) {
-        this(version, config, blockchain, ethereumListener);
+                 final BlockStore blockStore, final CompositeEthereumListener ethereumListener) {
+        this(version, config, blockchain, blockStore, ethereumListener);
     }
 
     Eth62(final EthVersion version, final SystemProperties config,
-          final Blockchain blockchain, final CompositeEthereumListener ethereumListener) {
-        super(version, config, blockchain, ethereumListener);
-        maxHashesAsk = config.maxHashesAsk();
+          final Blockchain blockchain, final BlockStore blockStore,
+          final CompositeEthereumListener ethereumListener) {
+        super(version, config, blockchain, blockStore, ethereumListener);
     }
 
     @Override
@@ -158,9 +181,21 @@ public class Eth62 extends EthHandler {
         byte protocolVersion = getVersion().getCode();
         int networkId = config.networkId();
 
-        BigInteger totalDifficulty = blockchain.getTotalDifficulty();
-        // Getting it from blockstore, not blocked by blockchain sync
-        byte[] bestHash = blockstore.getBestBlock().getHash();
+        final BigInteger totalDifficulty;
+        final byte[] bestHash;
+
+        if (syncManager.isFastSyncRunning()) {
+            // while fastsync is not complete reporting block #0
+            // until all blocks/receipts are downloaded
+            bestHash = blockstore.getBlockHashByNumber(0);
+            Block genesis = blockstore.getBlockByHash(bestHash);
+            totalDifficulty = genesis.getDifficultyBI();
+        } else {
+            // Getting it from blockstore, not blocked by blockchain sync
+            bestHash = blockstore.getBestBlock().getHash();
+            totalDifficulty = blockchain.getTotalDifficulty();
+        }
+
         StatusMessage msg = new StatusMessage(protocolVersion, networkId,
                 ByteUtil.bigIntegerToBytes(totalDifficulty), bestHash, config.getGenesis().getHash());
         sendMessage(msg);
@@ -187,6 +222,8 @@ public class Eth62 extends EthHandler {
     @Override
     public synchronized ListenableFuture<List<BlockHeader>> sendGetBlockHeaders(long blockNumber, int maxBlocksAsk, boolean reverse) {
 
+        if (ethState == EthState.STATUS_SUCCEEDED && peerState != IDLE) return null;
+
         if(logger.isTraceEnabled()) logger.trace(
                 "Peer {}: queue GetBlockHeaders, blockNumber [{}], maxBlocksAsk [{}]",
                 channel.getPeerIdShort(),
@@ -194,9 +231,13 @@ public class Eth62 extends EthHandler {
                 maxBlocksAsk
         );
 
+        if (headerRequest != null) {
+            throw new RuntimeException("The peer is waiting for headers response: " + this);
+        }
+
         GetBlockHeadersMessage headersRequest = new GetBlockHeadersMessage(blockNumber, null, maxBlocksAsk, 0, reverse);
         GetBlockHeadersMessageWrapper messageWrapper = new GetBlockHeadersMessageWrapper(headersRequest);
-        headerRequests.add(messageWrapper);
+        headerRequest = messageWrapper;
 
         sendNextHeaderRequest();
 
@@ -214,6 +255,8 @@ public class Eth62 extends EthHandler {
 
     protected synchronized ListenableFuture<List<BlockHeader>> sendGetBlockHeaders(byte[] blockHash, int maxBlocksAsk, int skip, boolean reverse, boolean newHashes) {
 
+        if (peerState != IDLE) return null;
+
         if(logger.isTraceEnabled()) logger.trace(
                 "Peer {}: queue GetBlockHeaders, blockHash [{}], maxBlocksAsk [{}], skip[{}], reverse [{}]",
                 channel.getPeerIdShort(),
@@ -221,18 +264,25 @@ public class Eth62 extends EthHandler {
                 maxBlocksAsk, skip, reverse
         );
 
+        if (headerRequest != null) {
+            throw new RuntimeException("The peer is waiting for headers response: " + this);
+        }
+
         GetBlockHeadersMessage headersRequest = new GetBlockHeadersMessage(0, blockHash, maxBlocksAsk, skip, reverse);
         GetBlockHeadersMessageWrapper messageWrapper = new GetBlockHeadersMessageWrapper(headersRequest, newHashes);
-        headerRequests.add(messageWrapper);
+        headerRequest = messageWrapper;
 
         sendNextHeaderRequest();
+        lastReqSentTime = System.currentTimeMillis();
 
         return messageWrapper.getFutureHeaders();
     }
 
     @Override
     public synchronized ListenableFuture<List<Block>> sendGetBlockBodies(List<BlockHeaderWrapper> headers) {
-        syncState = BLOCK_RETRIEVING;
+        if (peerState != IDLE) return null;
+
+        peerState = BLOCK_RETRIEVING;
         sentHeaders.clear();
         sentHeaders.addAll(headers);
 
@@ -250,6 +300,7 @@ public class Eth62 extends EthHandler {
         GetBlockBodiesMessage msg = new GetBlockBodiesMessage(hashes);
 
         sendMessage(msg);
+        lastReqSentTime = System.currentTimeMillis();
 
         futureBlocks = SettableFuture.create();
         return futureBlocks;
@@ -273,7 +324,7 @@ public class Eth62 extends EthHandler {
 
             if (!Arrays.equals(msg.getGenesisHash(), config.getGenesis().getHash())) {
                 if (!peerDiscoveryMode) {
-                    loggerNet.info("Removing EthHandler for {} due to protocol incompatibility", ctx.channel().remoteAddress());
+                    loggerNet.debug("Removing EthHandler for {} due to protocol incompatibility", ctx.channel().remoteAddress());
                 }
                 ethState = EthState.STATUS_FAILED;
                 disconnect(ReasonCode.INCOMPATIBLE_PROTOCOL);
@@ -325,7 +376,7 @@ public class Eth62 extends EthHandler {
         // while Long sync is in progress
         if (!syncDone) return;
 
-        if (syncState != HASH_RETRIEVING) {
+        if (peerState != HEADER_RETRIEVING) {
             long firstBlockAsk = Long.MAX_VALUE;
             long lastBlockAsk = 0;
             byte[] firstBlockHash = null;
@@ -360,14 +411,17 @@ public class Eth62 extends EthHandler {
     }
 
     protected synchronized void processGetBlockHeaders(GetBlockHeadersMessage msg) {
-        List<BlockHeader> headers = blockchain.getListOfHeadersStartFrom(
+        Iterator<BlockHeader> headersIterator = blockchain.getIteratorOfHeadersStartFrom(
                 msg.getBlockIdentifier(),
                 msg.getSkipBlocks(),
                 min(msg.getMaxHeaders(), MAX_HASHES_TO_SEND),
                 msg.isReverse()
         );
-
-        BlockHeadersMessage response = new BlockHeadersMessage(headers);
+        List<BlockHeader> blockHeaders = new ArrayList<>();
+        while (headersIterator.hasNext()) {
+            blockHeaders.add(headersIterator.next());
+        }
+        BlockHeadersMessage response = new BlockHeadersMessage(blockHeaders);
         sendMessage(response);
     }
 
@@ -379,7 +433,8 @@ public class Eth62 extends EthHandler {
                 msg.getBlockHeaders().size()
         );
 
-        GetBlockHeadersMessageWrapper request = headerRequests.poll();
+        GetBlockHeadersMessageWrapper request = headerRequest;
+        headerRequest = null;
 
         if (!isValid(msg, request)) {
 
@@ -396,12 +451,21 @@ public class Eth62 extends EthHandler {
             request.getFutureHeaders().set(received);
         }
 
-        syncState = IDLE;
+        processingTime += lastReqSentTime > 0 ? (System.currentTimeMillis() - lastReqSentTime) : 0;
+        lastReqSentTime = 0;
+        peerState = IDLE;
     }
 
     protected synchronized void processGetBlockBodies(GetBlockBodiesMessage msg) {
-        List<byte[]> bodies = blockchain.getListOfBodiesByHashes(msg.getBlockHashes());
-
+        Iterator<byte[]> bodiesIterator = blockchain.getIteratorOfBodiesByHashes(msg.getBlockHashes());
+        List<byte[]> bodies = new ArrayList<>();
+        int sizeSum = 0;
+        while (bodiesIterator.hasNext()) {
+            byte[] body = bodiesIterator.next();
+            sizeSum += ByteArrayEstimator.estimateSize(body);
+            bodies.add(body);
+            if (sizeSum >= MAX_MESSAGE_SIZE) break;
+        }
         BlockBodiesMessage response = new BlockBodiesMessage(bodies);
         sendMessage(response);
     }
@@ -422,10 +486,14 @@ public class Eth62 extends EthHandler {
 
         syncStats.addBlocks(msg.getBlockBodies().size());
 
-        List<Block> blocks = validateAndMerge(msg);
+        List<Block> blocks = null;
+        try {
+            blocks = validateAndMerge(msg);
+        } catch (Exception e) {
+            logger.info("Fatal validation error while processing block bodies from peer {}", channel.getPeerIdShort());
+        }
 
         if (blocks == null) {
-
             // headers will be returned by #onShutdown()
             dropConnection();
             return;
@@ -434,7 +502,9 @@ public class Eth62 extends EthHandler {
         futureBlocks.set(blocks);
         futureBlocks = null;
 
-        syncState = IDLE;
+        processingTime += (System.currentTimeMillis() - lastReqSentTime);
+        lastReqSentTime = 0;
+        peerState = IDLE;
     }
 
     protected synchronized void processNewBlock(NewBlockMessage newBlockMessage) {
@@ -463,7 +533,6 @@ public class Eth62 extends EthHandler {
     @Override
     public synchronized void fetchBodies(List<BlockHeaderWrapper> headers) {
         syncStats.reset();
-        syncState = BLOCK_RETRIEVING;
         sendGetBlockBodies(headers);
     }
 
@@ -472,21 +541,24 @@ public class Eth62 extends EthHandler {
         // do not send header requests if status hasn't been passed yet
         if (ethState == EthState.INIT) return;
 
-        GetBlockHeadersMessageWrapper wrapper = headerRequests.peek();
+        GetBlockHeadersMessageWrapper wrapper = headerRequest;
 
         if (wrapper == null || wrapper.isSent()) return;
 
-        syncState = HASH_RETRIEVING;
+        peerState = HEADER_RETRIEVING;
 
         wrapper.send();
         sendMessage(wrapper.getMessage());
+        lastReqSentTime = System.currentTimeMillis();
     }
 
     protected synchronized void processInitHeaders(List<BlockHeader> received) {
 
-        BlockHeader first = received.get(0);
+        final BlockHeader blockHeader = received.get(0);
+        final long blockNumber = blockHeader.getNumber();
+
         if (ethState == EthState.STATUS_SENT) {
-            updateBestBlock(first);
+            updateBestBlock(blockHeader);
 
             logger.trace("Peer {}: init request succeeded, best known block {}",
                     channel.getPeerIdShort(), bestKnownBlock);
@@ -494,41 +566,49 @@ public class Eth62 extends EthHandler {
             // checking if the peer has expected block hashes
             ethState = EthState.HASH_CONSTRAINTS_CHECK;
 
-            List<Pair<Long, byte[]>> constraints = config.getBlockchainConfig().
-                    getConfigForBlock(first.getNumber()).blockHashConstraints();
-
-            blockHashCheck = Collections.synchronizedMap(new HashMap<Long, byte[]>());
-            for (Pair<Long, byte[]> constraint : constraints) {
-                if (constraint.getLeft() <= getBestKnownBlock().getNumber()) {
-                    blockHashCheck.put(constraint.getLeft(), constraint.getRight());
-                    sendGetBlockHeaders(constraint.getLeft(), 1, false);
+            validatorMap = Collections.synchronizedMap(new HashMap<Long, BlockHeaderValidator>());
+            List<Pair<Long, BlockHeaderValidator>> validators = config.getBlockchainConfig().
+                    getConfigForBlock(blockNumber).headerValidators();
+            for (Pair<Long, BlockHeaderValidator> validator : validators) {
+                if (validator.getLeft() <= getBestKnownBlock().getNumber()) {
+                    validatorMap.put(validator.getLeft(), validator.getRight());
                 }
             }
 
-            logger.trace("Peer " + channel.getPeerIdShort() + ": Requested " + blockHashCheck.size() +
-                    " headers for hash check: " + blockHashCheck.keySet());
+            logger.trace("Peer " + channel.getPeerIdShort() + ": Requested " + validatorMap.size() +
+                    " headers for hash check: " + validatorMap.keySet());
+            requestNextHashCheck();
 
         } else {
-            byte[] expectedHash = blockHashCheck.get(first.getNumber());
-            if (expectedHash != null) {
-                if (FastByteComparisons.equal(expectedHash, first.getHash())) {
-                    blockHashCheck.remove(first.getNumber());
+            BlockHeaderValidator validator = validatorMap.get(blockNumber);
+            if (validator != null) {
+                BlockHeaderRule.ValidationResult result = validator.validate(blockHeader);
+                if (result.success) {
+                    validatorMap.remove(blockNumber);
+                    requestNextHashCheck();
                 } else {
-                    logger.debug("Peer " + channel.getPeerIdShort() + ": wrong fork (expected block " +
-                            first.getNumber() + " hash " + Hex.toHexString(expectedHash) + ", but got " +
-                            Hex.toHexString(first.getHash()) + ". Drop the peer and reduce reputation.");
+                    logger.debug("Peer {}: wrong fork ({}). Drop the peer and reduce reputation.", channel.getPeerIdShort(), result.error);
                     channel.getNodeStatistics().wrongFork = true;
                     dropConnection();
                 }
             }
         }
 
-        if (blockHashCheck.isEmpty()) {
+        if (validatorMap.isEmpty()) {
             ethState = EthState.STATUS_SUCCEEDED;
 
             logger.trace("Peer {}: all validations passed", channel.getPeerIdShort());
         }
     }
+
+    private void requestNextHashCheck() {
+       if (!validatorMap.isEmpty()) {
+            final Long checkHeader = validatorMap.keySet().iterator().next();
+            sendGetBlockHeaders(checkHeader, 1, false);
+            logger.trace("Peer {}: Requested #{} header for hash check.", channel.getPeerIdShort(), checkHeader);
+        }
+    }
+
 
     private void updateBestBlock(Block block) {
         updateBestBlock(block.getHeader());
@@ -569,12 +649,12 @@ public class Eth62 extends EthHandler {
 
     @Override
     public boolean isHashRetrievingDone() {
-        return syncState == DONE_HASH_RETRIEVING;
+        return peerState == DONE_HASH_RETRIEVING;
     }
 
     @Override
     public boolean isHashRetrieving() {
-        return syncState == HASH_RETRIEVING;
+        return peerState == HEADER_RETRIEVING;
     }
 
     @Override
@@ -589,7 +669,7 @@ public class Eth62 extends EthHandler {
 
     @Override
     public boolean isIdle() {
-        return syncState == IDLE;
+        return peerState == IDLE;
     }
 
     @Override
@@ -659,7 +739,7 @@ public class Eth62 extends EthHandler {
 
         if (bodies.hasNext()) {
             logger.info("Peer {}: invalid BLOCK_BODIES response: at least one block body doesn't correspond to any of requested headers: ",
-                    channel.getPeerIdShort(), Hex.toHexString(bodies.next()));
+                    channel.getPeerIdShort(), toHexString(bodies.next()));
             return null;
         }
 
@@ -785,9 +865,6 @@ public class Eth62 extends EthHandler {
 
     @Override
     public synchronized void dropConnection() {
-
-        // todo: reduce reputation
-
         logger.info("Peer {}: is a bad one, drop", channel.getPeerIdShort());
         disconnect(USELESS_PEER);
     }
@@ -798,15 +875,20 @@ public class Eth62 extends EthHandler {
 
     @Override
     public String getSyncStats() {
-
+        int waitResp = lastReqSentTime > 0 ? (int) (System.currentTimeMillis() - lastReqSentTime) / 1000 : 0;
+        long lifeTime = System.currentTimeMillis() - connectedTime;
         return String.format(
-                "Peer %s: [ %s, %16s, ping %6s ms, difficulty %s, best block %s ]: %s",
+                "Peer %s: [ %s, %18s, ping %6s ms, rep: %s, difficulty %s, best block %s%s]: (idle %s of %s) %s",
                 getVersion(),
                 channel.getPeerIdShort(),
-                syncState,
+                peerState,
                 (int)channel.getPeerStats().getAvgLatency(),
+                channel.getNodeStatistics().getReputation(),
                 getTotalDifficulty(),
                 getBestKnownBlock().getNumber(),
+                waitResp > 5 ? ", wait " + waitResp + "s" : " ",
+                longToTimePeriod(lifeTime - processingTime),
+                longToTimePeriod(lifeTime),
                 channel.getNodeStatistics().getClientId());
     }
 

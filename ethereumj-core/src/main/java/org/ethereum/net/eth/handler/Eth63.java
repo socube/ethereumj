@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.handler;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -6,8 +23,8 @@ import io.netty.channel.ChannelHandlerContext;
 import org.apache.commons.lang3.tuple.Pair;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.*;
-import org.ethereum.db.RepositoryImpl;
-import org.ethereum.db.RepositoryRoot;
+import org.ethereum.datasource.Source;
+import org.ethereum.db.BlockStore;
 import org.ethereum.listener.CompositeEthereumListener;
 import org.ethereum.net.eth.EthVersion;
 import org.ethereum.net.eth.message.EthMessage;
@@ -16,11 +33,12 @@ import org.ethereum.net.eth.message.GetReceiptsMessage;
 import org.ethereum.net.eth.message.NodeDataMessage;
 import org.ethereum.net.eth.message.ReceiptsMessage;
 
-import org.ethereum.sync.SyncState;
+import org.ethereum.net.message.ReasonCode;
+import org.ethereum.sync.PeerState;
 import org.ethereum.util.ByteArraySet;
 import org.ethereum.util.Value;
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
@@ -30,6 +48,7 @@ import java.util.Set;
 
 import static org.ethereum.crypto.HashUtil.sha3;
 import static org.ethereum.net.eth.EthVersion.V63;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Fast synchronization (PV63) Handler
@@ -40,24 +59,22 @@ public class Eth63 extends Eth62 {
 
     private static final EthVersion version = V63;
 
-    @Autowired
-    private Repository repository;
+    @Autowired @Qualifier("trieNodeSource")
+    private Source<byte[], byte[]> trieNodeSource;
 
+    private List<byte[]> requestedReceipts;
+    private SettableFuture<List<List<TransactionReceipt>>> requestReceiptsFuture;
     private Set<byte[]> requestedNodes;
     private SettableFuture<List<Pair<byte[], byte[]>>> requestNodesFuture;
-
-    private long connectedTime = System.currentTimeMillis();
-    private long processingTime = 0;
-    private long lastReqSentTime;
 
     public Eth63() {
         super(version);
     }
 
     @Autowired
-    public Eth63(final SystemProperties config, final Blockchain blockchain,
+    public Eth63(final SystemProperties config, final Blockchain blockchain, BlockStore blockStore,
                  final CompositeEthereumListener ethereumListener) {
-        super(version, config, blockchain, ethereumListener);
+        super(version, config, blockchain, blockStore, ethereumListener);
     }
 
     @Override
@@ -77,7 +94,7 @@ public class Eth63 extends Eth62 {
                 processGetReceipts((GetReceiptsMessage) msg);
                 break;
             case RECEIPTS:
-                // TODO: Implement
+                processReceipts((ReceiptsMessage) msg);
                 break;
             default:
                 break;
@@ -89,20 +106,21 @@ public class Eth63 extends Eth62 {
         if (logger.isTraceEnabled()) logger.trace(
                 "Peer {}: processing GetNodeData, size [{}]",
                 channel.getPeerIdShort(),
-                msg.getStateRoots().size()
+                msg.getNodeKeys().size()
         );
 
-        List<Value> states = new ArrayList<>();
-        for (byte[] stateRoot : msg.getStateRoots()) {
-            Value value = ((RepositoryImpl) repository).getState(stateRoot);
-            if (value != null) {
-                states.add(value);
-                logger.trace("Eth63: " + Hex.toHexString(stateRoot).substring(0, 8) + " -> " + value);
-            } else {
+        List<Value> nodeValues = new ArrayList<>();
+        for (byte[] nodeKey : msg.getNodeKeys()) {
+            byte[] rawNode = trieNodeSource.get(nodeKey);
+            if (rawNode != null) {
+                Value value = new Value(rawNode);
+                nodeValues.add(value);
+                if (nodeValues.size() >= MAX_HASHES_TO_SEND) break;
+                logger.trace("Eth63: " + toHexString(nodeKey).substring(0, 8) + " -> " + value);
             }
         }
 
-        sendMessage(new NodeDataMessage(states));
+        sendMessage(new NodeDataMessage(nodeValues));
     }
 
     protected synchronized void processGetReceipts(GetReceiptsMessage msg) {
@@ -114,6 +132,7 @@ public class Eth63 extends Eth62 {
         );
 
         List<List<TransactionReceipt>> receipts = new ArrayList<>();
+        int sizeSum = 0;
         for (byte[] blockHash : msg.getBlockHashes()) {
             Block block = blockchain.getBlockByHash(blockHash);
             if (block == null) continue;
@@ -121,49 +140,109 @@ public class Eth63 extends Eth62 {
             List<TransactionReceipt> blockReceipts = new ArrayList<>();
             for (Transaction transaction : block.getTransactionsList()) {
                 TransactionInfo transactionInfo = blockchain.getTransactionInfo(transaction.getHash());
+                if (transactionInfo == null) break;
                 blockReceipts.add(transactionInfo.getReceipt());
+                sizeSum += TransactionReceipt.MemEstimator.estimateSize(transactionInfo.getReceipt());
             }
             receipts.add(blockReceipts);
+            if (sizeSum >= MAX_MESSAGE_SIZE) break;
         }
 
         sendMessage(new ReceiptsMessage(receipts));
     }
 
     public synchronized ListenableFuture<List<Pair<byte[], byte[]>>> requestTrieNodes(List<byte[]> hashes) {
+        if (peerState != PeerState.IDLE) return null;
+
         GetNodeDataMessage msg = new GetNodeDataMessage(hashes);
         requestedNodes = new ByteArraySet();
         requestedNodes.addAll(hashes);
+
         requestNodesFuture = SettableFuture.create();
-        syncState = SyncState.NODE_RETRIEVING;
         sendMessage(msg);
         lastReqSentTime = System.currentTimeMillis();
+
+        peerState = PeerState.NODE_RETRIEVING;
         return requestNodesFuture;
+    }
+
+    public synchronized ListenableFuture<List<List<TransactionReceipt>>> requestReceipts(List<byte[]> hashes) {
+        if (peerState != PeerState.IDLE) return null;
+
+        GetReceiptsMessage msg = new GetReceiptsMessage(hashes);
+        requestedReceipts = hashes;
+        peerState = PeerState.RECEIPT_RETRIEVING;
+
+        requestReceiptsFuture = SettableFuture.create();
+        sendMessage(msg);
+        lastReqSentTime = System.currentTimeMillis();
+
+        return requestReceiptsFuture;
     }
 
     protected synchronized void processNodeData(NodeDataMessage msg) {
         if (requestedNodes == null) {
-            logger.debug("Received NodeDataMessage when requestedNodes == null. Dropping peer");
+            logger.debug("Received NodeDataMessage when requestedNodes == null. Dropping peer " + channel);
             dropConnection();
         }
 
         List<Pair<byte[], byte[]>> ret = new ArrayList<>();
+        if(msg.getDataList().isEmpty()) {
+            String err = String.format("Received NodeDataMessage contains empty node data. Dropping peer %s", channel);
+            logger.debug(err);
+            requestNodesFuture.setException(new RuntimeException(err));
+            // Not fatal but let us touch it later
+            channel.getChannelManager().disconnect(channel, ReasonCode.TOO_MANY_PEERS);
+            return;
+        }
+
         for (Value nodeVal : msg.getDataList()) {
-            byte[] hash = nodeVal.hash();
+            byte[] hash = sha3(nodeVal.asBytes());
             if (!requestedNodes.contains(hash)) {
-                String err = "Received NodeDataMessage contains non-requested node with hash :" + Hex.toHexString(hash) + " . Dropping peer";
-                logger.debug(err);
-                requestNodesFuture.setException(new RuntimeException(err));
-                dropConnection();
+                String err = "Received NodeDataMessage contains non-requested node with hash :" + toHexString(hash) + " . Dropping peer " + channel;
+                dropUselessPeer(err);
                 return;
             }
-            ret.add(Pair.of(hash, nodeVal.encode()));
+            ret.add(Pair.of(hash, nodeVal.asBytes()));
         }
         requestNodesFuture.set(ret);
 
         requestedNodes = null;
         requestNodesFuture = null;
         processingTime += (System.currentTimeMillis() - lastReqSentTime);
-        syncState = SyncState.IDLE;
+        lastReqSentTime = 0;
+        peerState = PeerState.IDLE;
+    }
+
+    protected synchronized void processReceipts(ReceiptsMessage msg) {
+        if (requestedReceipts == null) {
+            logger.debug("Received ReceiptsMessage when requestedReceipts == null. Dropping peer " + channel);
+            dropConnection();
+        }
+
+
+        if (logger.isTraceEnabled()) logger.trace(
+                "Peer {}: processing Receipts, size [{}]",
+                channel.getPeerIdShort(),
+                msg.getReceipts().size()
+        );
+
+        List<List<TransactionReceipt>> receipts = msg.getReceipts();
+
+        requestReceiptsFuture.set(receipts);
+
+        requestedReceipts = null;
+        requestReceiptsFuture = null;
+        processingTime += (System.currentTimeMillis() - lastReqSentTime);
+        lastReqSentTime = 0;
+        peerState = PeerState.IDLE;
+    }
+
+
+    private void dropUselessPeer(String err) {
+        logger.debug(err);
+        requestNodesFuture.setException(new RuntimeException(err));
+        dropConnection();
     }
 
     @Override
@@ -171,7 +250,6 @@ public class Eth63 extends Eth62 {
         double nodesPerSec = 1000d * channel.getNodeStatistics().eth63NodesReceived.get() / channel.getNodeStatistics().eth63NodesRetrieveTime.get();
         double missNodesRatio = 1 - (double) channel.getNodeStatistics().eth63NodesReceived.get() / channel.getNodeStatistics().eth63NodesRequested.get();
         long lifeTime = System.currentTimeMillis() - connectedTime;
-        return super.getSyncStats() + String.format("\tNodes/sec: %1$.2f, miss: %2$.2f", nodesPerSec, missNodesRatio) +
-                "\tLife: " + lifeTime / 1000 + "s,\tIdle: " + (lifeTime - processingTime) + "ms";
+        return super.getSyncStats() + String.format("\tNodes/sec: %1$.2f, miss: %2$.2f", nodesPerSec, missNodesRatio);
     }
 }

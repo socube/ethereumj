@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.util;
 
 import com.cedarsoftware.util.DeepEquals;
@@ -9,6 +26,8 @@ import java.math.BigInteger;
 
 import java.util.Arrays;
 import java.util.List;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Class to encapsulate an object and provide utilities for conversion
@@ -48,6 +67,11 @@ public class Value {
         } else {
             this.value = obj;
         }
+    }
+
+    public Value withHash(byte[] hash) {
+        sha3 = hash;
+        return this;
     }
 
     /* *****************
@@ -249,7 +273,7 @@ public class Value {
         if (isNull()) return true;
         if (isBytes() && asBytes().length == 0) return true;
         if (isList() && asList().isEmpty()) return true;
-        if (isString() && asString().equals("")) return true;
+        if (isString() && asString().isEmpty()) return true;
 
         return false;
     }
@@ -315,7 +339,7 @@ public class Value {
 
             StringBuilder output = new StringBuilder();
             if (isHashCode()) {
-                output.append(Hex.toHexString(asBytes()));
+                output.append(toHexString(asBytes()));
             } else if (isReadableString()) {
                 output.append("'");
                 for (byte oneByte : asBytes()) {
@@ -328,7 +352,7 @@ public class Value {
                 output.append("'");
                 return output.toString();
             }
-            return Hex.toHexString(this.asBytes());
+            return toHexString(this.asBytes());
         } else if (isString()) {
             return asString();
         }

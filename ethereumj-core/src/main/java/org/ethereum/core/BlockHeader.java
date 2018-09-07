@@ -1,11 +1,25 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import org.ethereum.config.BlockchainNetConfig;
-import org.ethereum.config.SystemProperties;
 import org.ethereum.crypto.HashUtil;
-import org.ethereum.util.RLP;
-import org.ethereum.util.RLPList;
-import org.ethereum.util.Utils;
+import org.ethereum.util.*;
 import org.spongycastle.util.Arrays;
 import org.spongycastle.util.BigIntegers;
 import org.spongycastle.util.encoders.Hex;
@@ -13,6 +27,7 @@ import org.spongycastle.util.encoders.Hex;
 import java.math.BigInteger;
 import java.util.List;
 
+import static org.ethereum.crypto.HashUtil.EMPTY_LIST_HASH;
 import static org.ethereum.crypto.HashUtil.EMPTY_TRIE_HASH;
 import static org.ethereum.util.ByteUtil.toHexString;
 
@@ -25,6 +40,7 @@ public class BlockHeader {
     public static final int NONCE_LENGTH = 8;
     public static final int HASH_LENGTH = 32;
     public static final int ADDRESS_LENGTH = 20;
+    public static final int MAX_HEADER_SIZE = 800;
 
     /* The SHA3 256-bit hash of the parent block, in its entirety */
     private byte[] parentHash;
@@ -46,8 +62,9 @@ public class BlockHeader {
      * list portion, the trie is populate by [key, val] --> [rlp(index), rlp(tx_recipe)]
      * of the block */
     private byte[] receiptTrieRoot;
-
-    /*todo: comment it when you know what the fuck it is*/
+    /* The Bloom filter composed from indexable information 
+     * (logger address and log topics) contained in each log entry 
+     * from the receipt of each transaction in the transactions list */
     private byte[] logsBloom;
     /* A scalar value corresponding to the difficulty level of this block.
      * This can be calculated from the previous block’s difficulty level
@@ -73,6 +90,8 @@ public class BlockHeader {
     /* A 256-bit hash which proves that a sufficient amount
      * of computation has been carried out on this block */
     private byte[] nonce;
+
+    private byte[] hashCache;
 
     public BlockHeader(byte[] encoded) {
         this((RLPList) RLP.decode2(encoded).get(0));
@@ -101,11 +120,11 @@ public class BlockHeader {
         byte[] guBytes = rlpHeader.get(10).getRLPData();
         byte[] tsBytes = rlpHeader.get(11).getRLPData();
 
-        this.number = nrBytes == null ? 0 : (new BigInteger(1, nrBytes)).longValue();
+        this.number = ByteUtil.byteArrayToLong(nrBytes);
 
         this.gasLimit = glBytes;
-        this.gasUsed = guBytes == null ? 0 : (new BigInteger(1, guBytes)).longValue();
-        this.timestamp = tsBytes == null ? 0 : (new BigInteger(1, tsBytes)).longValue();
+        this.gasUsed = ByteUtil.byteArrayToLong(guBytes);
+        this.timestamp = ByteUtil.byteArrayToLong(tsBytes);
 
         this.extraData = rlpHeader.get(12).getRLPData();
         this.mixHash = rlpHeader.get(13).getRLPData();
@@ -128,7 +147,7 @@ public class BlockHeader {
         this.extraData = extraData;
         this.mixHash = mixHash;
         this.nonce = nonce;
-        this.stateRoot = HashUtil.EMPTY_TRIE_HASH;
+        this.stateRoot = EMPTY_TRIE_HASH;
     }
 
     public boolean isGenesis() {
@@ -145,6 +164,7 @@ public class BlockHeader {
 
     public void setUnclesHash(byte[] unclesHash) {
         this.unclesHash = unclesHash;
+        hashCache = null;
     }
 
     public byte[] getCoinbase() {
@@ -153,6 +173,7 @@ public class BlockHeader {
 
     public void setCoinbase(byte[] coinbase) {
         this.coinbase = coinbase;
+        hashCache = null;
     }
 
     public byte[] getStateRoot() {
@@ -161,6 +182,7 @@ public class BlockHeader {
 
     public void setStateRoot(byte[] stateRoot) {
         this.stateRoot = stateRoot;
+        hashCache = null;
     }
 
     public byte[] getTxTrieRoot() {
@@ -169,6 +191,7 @@ public class BlockHeader {
 
     public void setReceiptsRoot(byte[] receiptTrieRoot) {
         this.receiptTrieRoot = receiptTrieRoot;
+        hashCache = null;
     }
 
     public byte[] getReceiptsRoot() {
@@ -177,6 +200,7 @@ public class BlockHeader {
 
     public void setTransactionsRoot(byte[] stateRoot) {
         this.txTrieRoot = stateRoot;
+        hashCache = null;
     }
 
 
@@ -195,6 +219,7 @@ public class BlockHeader {
 
     public void setDifficulty(byte[] difficulty) {
         this.difficulty = difficulty;
+        hashCache = null;
     }
 
     public long getTimestamp() {
@@ -203,6 +228,7 @@ public class BlockHeader {
 
     public void setTimestamp(long timestamp) {
         this.timestamp = timestamp;
+        hashCache = null;
     }
 
     public long getNumber() {
@@ -211,6 +237,7 @@ public class BlockHeader {
 
     public void setNumber(long number) {
         this.number = number;
+        hashCache = null;
     }
 
     public byte[] getGasLimit() {
@@ -219,6 +246,7 @@ public class BlockHeader {
 
     public void setGasLimit(byte[] gasLimit) {
         this.gasLimit = gasLimit;
+        hashCache = null;
     }
 
     public long getGasUsed() {
@@ -227,6 +255,7 @@ public class BlockHeader {
 
     public void setGasUsed(long gasUsed) {
         this.gasUsed = gasUsed;
+        hashCache = null;
     }
 
     public byte[] getMixHash() {
@@ -235,6 +264,7 @@ public class BlockHeader {
 
     public void setMixHash(byte[] mixHash) {
         this.mixHash = mixHash;
+        hashCache = null;
     }
 
     public byte[] getExtraData() {
@@ -247,18 +277,24 @@ public class BlockHeader {
 
     public void setNonce(byte[] nonce) {
         this.nonce = nonce;
+        hashCache = null;
     }
 
     public void setLogsBloom(byte[] logsBloom) {
         this.logsBloom = logsBloom;
+        hashCache = null;
     }
 
     public void setExtraData(byte[] extraData) {
         this.extraData = extraData;
+        hashCache = null;
     }
 
     public byte[] getHash() {
-        return HashUtil.sha3(getEncoded());
+        if (hashCache == null) {
+            hashCache = HashUtil.sha3(getEncoded());
+        }
+        return hashCache;
     }
 
     public byte[] getEncoded() {
@@ -284,7 +320,7 @@ public class BlockHeader {
         byte[] receiptTrieRoot = RLP.encodeElement(this.receiptTrieRoot);
 
         byte[] logsBloom = RLP.encodeElement(this.logsBloom);
-        byte[] difficulty = RLP.encodeElement(this.difficulty);
+        byte[] difficulty = RLP.encodeBigInteger(new BigInteger(1, this.difficulty));
         byte[] number = RLP.encodeBigInteger(BigInteger.valueOf(this.number));
         byte[] gasLimit = RLP.encodeElement(this.gasLimit);
         byte[] gasUsed = RLP.encodeBigInteger(BigInteger.valueOf(this.gasUsed));
@@ -337,6 +373,10 @@ public class BlockHeader {
                 calcDifficulty(this, parent);
     }
 
+    public boolean hasUncles() {
+        return !FastByteComparisons.equal(unclesHash, EMPTY_LIST_HASH);
+    }
+
     public String toString() {
         return toStringWithSuffix("\n");
     }
@@ -369,5 +409,18 @@ public class BlockHeader {
     public String getShortDescr() {
         return "#" + getNumber() + " (" + Hex.toHexString(getHash()).substring(0,6) + " <~ "
                 + Hex.toHexString(getParentHash()).substring(0,6) + ")";
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        BlockHeader that = (BlockHeader) o;
+        return FastByteComparisons.equal(getHash(), that.getHash());
+    }
+
+    @Override
+    public int hashCode() {
+        return Arrays.hashCode(getHash());
     }
 }

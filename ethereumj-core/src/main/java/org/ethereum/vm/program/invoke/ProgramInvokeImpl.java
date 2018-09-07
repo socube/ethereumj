@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm.program.invoke;
 
 import org.ethereum.core.Repository;
@@ -37,12 +54,14 @@ public class ProgramInvokeImpl implements ProgramInvoke {
     private boolean byTransaction = true;
     private boolean byTestingSuite = false;
     private int callDeep = 0;
+    private boolean isStaticCall = false;
 
     public ProgramInvokeImpl(DataWord address, DataWord origin, DataWord caller, DataWord balance,
                              DataWord gasPrice, DataWord gas, DataWord callValue, byte[] msgData,
                              DataWord lastHash, DataWord coinbase, DataWord timestamp, DataWord number, DataWord
                                      difficulty,
-                             DataWord gaslimit, Repository repository, int callDeep, BlockStore blockStore, boolean byTestingSuite) {
+                             DataWord gaslimit, Repository repository, int callDeep, BlockStore blockStore,
+                             boolean isStaticCall, boolean byTestingSuite) {
 
         // Transaction env
         this.address = address;
@@ -67,6 +86,7 @@ public class ProgramInvokeImpl implements ProgramInvoke {
         this.byTransaction = false;
         this.callDeep = callDeep;
         this.blockStore = blockStore;
+        this.isStaticCall = isStaticCall;
         this.byTestingSuite = byTestingSuite;
     }
 
@@ -88,23 +108,23 @@ public class ProgramInvokeImpl implements ProgramInvoke {
                              Repository repository, BlockStore blockStore) {
 
         // Transaction env
-        this.address = new DataWord(address);
-        this.origin = new DataWord(origin);
-        this.caller = new DataWord(caller);
-        this.balance = new DataWord(balance);
-        this.gasPrice = new DataWord(gasPrice);
-        this.gas = new DataWord(gas);
+        this.address = DataWord.of(address);
+        this.origin = DataWord.of(origin);
+        this.caller = DataWord.of(caller);
+        this.balance = DataWord.of(balance);
+        this.gasPrice = DataWord.of(gasPrice);
+        this.gas = DataWord.of(gas);
         this.gasLong = this.gas.longValueSafe();
-        this.callValue = new DataWord(callValue);
+        this.callValue = DataWord.of(callValue);
         this.msgData = msgData;
 
         // last Block env
-        this.prevHash = new DataWord(lastHash);
-        this.coinbase = new DataWord(coinbase);
-        this.timestamp = new DataWord(timestamp);
-        this.number = new DataWord(number);
-        this.difficulty = new DataWord(difficulty);
-        this.gaslimit = new DataWord(gaslimit);
+        this.prevHash = DataWord.of(lastHash);
+        this.coinbase = DataWord.of(coinbase);
+        this.timestamp = DataWord.of(timestamp);
+        this.number = DataWord.of(number);
+        this.difficulty = DataWord.of(difficulty);
+        this.gaslimit = DataWord.of(gaslimit);
 
         this.repository = repository;
         this.blockStore = blockStore;
@@ -167,13 +187,13 @@ public class ProgramInvokeImpl implements ProgramInvoke {
 
         if (msgData == null || index >= msgData.length
                 || tempIndex.compareTo(MAX_MSG_DATA) == 1)
-            return new DataWord();
+            return DataWord.ZERO;
         if (index + size > msgData.length)
             size = msgData.length - index;
 
         byte[] data = new byte[32];
         System.arraycopy(msgData, index, data, 0, size);
-        return new DataWord(data);
+        return DataWord.of(data);
     }
 
     /*  CALLDATASIZE */
@@ -181,7 +201,7 @@ public class ProgramInvokeImpl implements ProgramInvoke {
 
         if (msgData == null || msgData.length == 0) return DataWord.ZERO;
         int size = msgData.length;
-        return new DataWord(size);
+        return DataWord.of(size);
     }
 
     /*  CALLDATACOPY */
@@ -249,6 +269,11 @@ public class ProgramInvokeImpl implements ProgramInvoke {
     @Override
     public boolean byTransaction() {
         return byTransaction;
+    }
+
+    @Override
+    public boolean isStaticCall() {
+        return isStaticCall;
     }
 
     @Override

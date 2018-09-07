@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import org.ethereum.crypto.ECKey;
@@ -5,32 +22,22 @@ import org.ethereum.util.ByteUtil;
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPItem;
 import org.ethereum.util.RLPList;
-import org.spongycastle.util.encoders.Hex;
-
-//import java.nio.charset.Charset;
-
-import static org.ethereum.util.ByteUtil.longToBytes;
-import static org.ethereum.util.ByteUtil.stripLeadingZeroes;
 
 public class PongMessage extends Message {
 
     byte[] token; // token is the MDC of the ping
     long expires;
 
-    public static PongMessage create(byte[] token, String host, int port, ECKey privKey) {
+    public static PongMessage create(byte[] token, Node toNode, ECKey privKey) {
 
         long expiration = 90 * 60 + System.currentTimeMillis() / 1000;
 
-        byte[] rlpIp = RLP.encodeElement(host.getBytes());
-
-        byte[] tmpPort = longToBytes(port);
-        byte[] rlpPort = RLP.encodeElement(stripLeadingZeroes(tmpPort));
-        byte[] rlpToList = RLP.encodeList(rlpIp, rlpPort, rlpPort);
+        byte[] rlpToList = toNode.getBriefRLP();
 
         /* RLP Encode data */
         byte[] rlpToken = RLP.encodeElement(token);
-        byte[] tmpExp = longToBytes(expiration);
-        byte[] rlpExp = RLP.encodeElement(stripLeadingZeroes(tmpExp));
+        byte[] tmpExp = ByteUtil.longToBytes(expiration);
+        byte[] rlpExp = RLP.encodeElement(ByteUtil.stripLeadingZeroes(tmpExp));
 
         byte[] type = new byte[]{2};
         byte[] data = RLP.encodeList(rlpToList, rlpToken, rlpExp);
@@ -90,7 +97,7 @@ public class PongMessage extends Message {
         long currTime = System.currentTimeMillis() / 1000;
 
         String out = String.format("[PongMessage] \n token: %s \n expires in %d seconds \n %s\n",
-                Hex.toHexString(token), (expires - currTime), super.toString());
+                ByteUtil.toHexString(token), (expires - currTime), super.toString());
 
         return out;
     }

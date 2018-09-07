@@ -1,8 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.mine;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.commons.lang3.tuple.Pair;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.Block;
@@ -13,10 +31,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
+import java.util.Collection;
+import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.ethereum.crypto.HashUtil.sha3;
+import static org.ethereum.mine.EthashListener.DatasetStatus.DATASET_READY;
+import static org.ethereum.mine.EthashListener.DatasetStatus.DATASET_PREPARE;
+import static org.ethereum.mine.EthashListener.DatasetStatus.FULL_DATASET_GENERATED;
+import static org.ethereum.mine.EthashListener.DatasetStatus.FULL_DATASET_GENERATE_START;
+import static org.ethereum.mine.EthashListener.DatasetStatus.FULL_DATASET_LOADED;
+import static org.ethereum.mine.EthashListener.DatasetStatus.FULL_DATASET_LOAD_START;
+import static org.ethereum.mine.EthashListener.DatasetStatus.LIGHT_DATASET_GENERATED;
+import static org.ethereum.mine.EthashListener.DatasetStatus.LIGHT_DATASET_GENERATE_START;
+import static org.ethereum.mine.EthashListener.DatasetStatus.LIGHT_DATASET_LOADED;
+import static org.ethereum.mine.EthashListener.DatasetStatus.LIGHT_DATASET_LOAD_START;
 import static org.ethereum.util.ByteUtil.longToBytes;
+import static org.ethereum.mine.MinerIfc.MiningResult;
 
 /**
  * More high level validator/miner class which keeps a cache for the last requested block epoch
@@ -25,26 +58,41 @@ import static org.ethereum.util.ByteUtil.longToBytes;
  */
 public class Ethash {
     private static final Logger logger = LoggerFactory.getLogger("mine");
-    private static EthashParams ethashParams = new EthashParams();
+    static EthashParams ethashParams = new EthashParams();
 
-    private static Ethash cachedInstance = null;
-    private static long cachedBlockEpoch = 0;
-//    private static ExecutorService executor = Executors.newSingleThreadExecutor();
+    static Ethash cachedInstance = null;
+    long epoch = 0;
+    //    private static ExecutorService executor = Executors.newSingleThreadExecutor();
     private static ListeningExecutorService executor = MoreExecutors.listeningDecorator(
-        new ThreadPoolExecutor(8, 8, 0L, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>()));
+            new ThreadPoolExecutor(8, 8, 0L, TimeUnit.SECONDS, new LinkedBlockingQueue<>(),
+            new ThreadFactoryBuilder().setNameFormat("ethash-pool-%d").build()));
 
     public static boolean fileCacheEnabled = true;
 
+    private Set<EthashListener> listeners = new CopyOnWriteArraySet <>();
+
     /**
-     * Returns instance for the specified block number either from cache or calculates a new one
+     * Returns instance for the specified block number
+     * either from cache or calculates a new one
      */
     public static Ethash getForBlock(SystemProperties config, long blockNumber) {
         long epoch = blockNumber / ethashParams.getEPOCH_LENGTH();
-        if (cachedInstance == null || epoch != cachedBlockEpoch) {
+        if (cachedInstance == null || epoch != cachedInstance.epoch) {
             cachedInstance = new Ethash(config, epoch * ethashParams.getEPOCH_LENGTH());
-            cachedBlockEpoch = epoch;
         }
         return cachedInstance;
+    }
+
+    /**
+     * Returns instance for the specified block number
+     * either from cache or calculates a new one
+     * and adds listeners to Ethash
+     */
+    public static Ethash getForBlock(SystemProperties config, long blockNumber, Collection<EthashListener> listeners) {
+        Ethash ethash = getForBlock(config, blockNumber);
+        ethash.listeners.clear();
+        ethash.listeners.addAll(listeners);
+        return ethash;
     }
 
     private EthashAlgo ethashAlgo = new EthashAlgo(ethashParams);
@@ -53,21 +101,43 @@ public class Ethash {
     private int[] cacheLight = null;
     private int[] fullData = null;
     private SystemProperties config;
+    private long startNonce = -1;
 
     public Ethash(SystemProperties config, long blockNumber) {
         this.config = config;
         this.blockNumber = blockNumber;
+        this.epoch = blockNumber / ethashAlgo.getParams().getEPOCH_LENGTH();
+        if (config.getConfig().hasPath("mine.startNonce")) {
+            startNonce = config.getConfig().getLong("mine.startNonce");
+        }
     }
 
     public synchronized int[] getCacheLight() {
         if (cacheLight == null) {
-            File file = new File(config.databaseDir(), "mine-dag-light.dat");
+            fireDatatasetStatusUpdate(DATASET_PREPARE);
+            getCacheLightImpl();
+            fireDatatasetStatusUpdate(DATASET_READY);
+        }
+
+        return cacheLight;
+    }
+
+    /**
+     * Checks whether light DAG is already generated and loads it
+     * from cache, otherwise generates it
+     * @return  Light DAG
+     */
+    private synchronized int[] getCacheLightImpl() {
+        if (cacheLight == null) {
+            File file = new File(config.ethashDir(), "mine-dag-light.dat");
             if (fileCacheEnabled && file.canRead()) {
+                fireDatatasetStatusUpdate(LIGHT_DATASET_LOAD_START);
                 try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file))) {
                     logger.info("Loading light dataset from " + file.getAbsolutePath());
                     long bNum = ois.readLong();
                     if (bNum == blockNumber) {
                         cacheLight = (int[]) ois.readObject();
+                        fireDatatasetStatusUpdate(LIGHT_DATASET_LOADED);
                         logger.info("Dataset loaded.");
                     } else {
                         logger.info("Dataset block number miss: " + bNum + " != " + blockNumber);
@@ -79,6 +149,7 @@ public class Ethash {
 
             if (cacheLight == null) {
                 logger.info("Calculating light dataset...");
+                fireDatatasetStatusUpdate(LIGHT_DATASET_GENERATE_START);
                 cacheLight = getEthashAlgo().makeCache(getEthashAlgo().getParams().getCacheSize(blockNumber),
                         getEthashAlgo().getSeedHash(blockNumber));
                 logger.info("Light dataset calculated.");
@@ -93,6 +164,7 @@ public class Ethash {
                         throw new RuntimeException(e);
                     }
                 }
+                fireDatatasetStatusUpdate(LIGHT_DATASET_GENERATED);
             }
         }
         return cacheLight;
@@ -100,14 +172,17 @@ public class Ethash {
 
     public synchronized int[] getFullDataset() {
         if (fullData == null) {
-            File file = new File(config.databaseDir(), "mine-dag.dat");
+            fireDatatasetStatusUpdate(DATASET_PREPARE);
+            File file = new File(config.ethashDir(), "mine-dag.dat");
             if (fileCacheEnabled && file.canRead()) {
+                fireDatatasetStatusUpdate(FULL_DATASET_LOAD_START);
                 try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file))) {
                     logger.info("Loading dataset from " + file.getAbsolutePath());
                     long bNum = ois.readLong();
                     if (bNum == blockNumber) {
                         fullData = (int[]) ois.readObject();
                         logger.info("Dataset loaded.");
+                        fireDatatasetStatusUpdate(FULL_DATASET_LOADED);
                     } else {
                         logger.info("Dataset block number miss: " + bNum + " != " + blockNumber);
                     }
@@ -119,7 +194,9 @@ public class Ethash {
             if (fullData == null){
 
                 logger.info("Calculating full dataset...");
-                fullData = getEthashAlgo().calcDataset(getFullSize(), getCacheLight());
+                fireDatatasetStatusUpdate(FULL_DATASET_GENERATE_START);
+                int[] cacheLight = getCacheLightImpl();
+                fullData = getEthashAlgo().calcDataset(getFullSize(), cacheLight);
                 logger.info("Full dataset calculated.");
 
                 if (fileCacheEnabled) {
@@ -132,8 +209,14 @@ public class Ethash {
                         throw new RuntimeException(e);
                     }
                 }
+                fireDatatasetStatusUpdate(FULL_DATASET_GENERATED);
             }
+            fireDatatasetStatusUpdate(DATASET_READY);
         }
+        return fullData;
+    }
+
+    int[] getFullData() {
         return fullData;
     }
 
@@ -165,7 +248,7 @@ public class Ethash {
                 longToBytes(nonce));
     }
 
-    public ListenableFuture<Long> mine(final Block block) {
+    public ListenableFuture<MiningResult> mine(final Block block) {
         return mine(block, 1);
     }
 
@@ -180,18 +263,22 @@ public class Ethash {
      *  @param nThreads CPU threads to mine on
      *  @return the task which may be cancelled. On success returns nonce
      */
-    public ListenableFuture<Long> mine(final Block block, int nThreads) {
-        return new MineTask(block, nThreads,  new Callable<Long>() {
+    public ListenableFuture<MiningResult> mine(final Block block, int nThreads) {
+        return new MineTask(block, nThreads,  new Callable<MiningResult>() {
+            AtomicLong taskStartNonce = new AtomicLong(startNonce >= 0 ? startNonce : new Random().nextLong());
             @Override
-            public Long call() throws Exception {
-                return getEthashAlgo().mine(getFullSize(), getFullDataset(),
+            public MiningResult call() throws Exception {
+                long threadStartNonce = taskStartNonce.getAndAdd(0x100000000L);
+                long nonce = getEthashAlgo().mine(getFullSize(), getFullDataset(),
                         sha3(block.getHeader().getEncodedWithoutNonce()),
-                        ByteUtil.byteArrayToLong(block.getHeader().getDifficulty()));
+                        ByteUtil.byteArrayToLong(block.getHeader().getDifficulty()), threadStartNonce);
+                final Pair<byte[], byte[]> pair = hashimotoLight(block.getHeader(), nonce);
+                return new MiningResult(nonce, pair.getLeft(), block);
             }
         }).submit();
     }
 
-    public ListenableFuture<Long> mineLight(final Block block) {
+    public ListenableFuture<MiningResult> mineLight(final Block block) {
         return mineLight(block, 1);
     }
 
@@ -206,13 +293,17 @@ public class Ethash {
      *  @param nThreads CPU threads to mine on
      *  @return the task which may be cancelled. On success returns nonce
      */
-    public ListenableFuture<Long> mineLight(final Block block, int nThreads) {
-        return new MineTask(block, nThreads,  new Callable<Long>() {
+    public ListenableFuture<MiningResult> mineLight(final Block block, int nThreads) {
+        return new MineTask(block, nThreads,  new Callable<MiningResult>() {
+            AtomicLong taskStartNonce = new AtomicLong(startNonce >= 0 ? startNonce : new Random().nextLong());
             @Override
-            public Long call() throws Exception {
-                return getEthashAlgo().mineLight(getFullSize(), getCacheLight(),
+            public MiningResult call() throws Exception {
+                long threadStartNonce = taskStartNonce.getAndAdd(0x100000000L);
+                final long nonce = getEthashAlgo().mineLight(getFullSize(), getCacheLight(),
                         sha3(block.getHeader().getEncodedWithoutNonce()),
-                        ByteUtil.byteArrayToLong(block.getHeader().getDifficulty()));
+                        ByteUtil.byteArrayToLong(block.getHeader().getDifficulty()), threadStartNonce);
+                final Pair<byte[], byte[]> pair = hashimotoLight(block.getHeader(), nonce);
+                return new MiningResult(nonce, pair.getLeft(), block);
             }
         }).submit();
     }
@@ -227,12 +318,18 @@ public class Ethash {
         return FastByteComparisons.compareTo(hash, 0, 32, boundary, 0, 32) < 0;
     }
 
-    class MineTask extends AnyFuture<Long> {
+    private void fireDatatasetStatusUpdate(EthashListener.DatasetStatus status) {
+        for (EthashListener l : listeners) {
+            l.onDatasetUpdate(status);
+        }
+    }
+
+    class MineTask extends AnyFuture<MiningResult> {
         Block block;
         int nThreads;
-        Callable<Long> miner;
+        Callable<MiningResult> miner;
 
-        public MineTask(Block block, int nThreads, Callable<Long> miner) {
+        public MineTask(Block block, int nThreads, Callable<MiningResult> miner) {
             this.block = block;
             this.nThreads = nThreads;
             this.miner = miner;
@@ -240,16 +337,16 @@ public class Ethash {
 
         public MineTask submit() {
             for (int i = 0; i < nThreads; i++) {
-                ListenableFuture<Long> f = executor.submit(miner);
+                ListenableFuture<MiningResult> f = executor.submit(miner);
                 add(f);
             }
             return this;
         }
 
         @Override
-        protected void postProcess(Long nonce) {
-            Pair<byte[], byte[]> pair = hashimotoLight(block.getHeader(), nonce);
-            block.setNonce(longToBytes(nonce));
+        protected void postProcess(MiningResult result) {
+            Pair<byte[], byte[]> pair = hashimotoLight(block.getHeader(), result.nonce);
+            block.setNonce(longToBytes(result.nonce));
             block.setMixHash(pair.getLeft());
         }
     }

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm.program.invoke;
 
 import org.ethereum.core.Block;
@@ -10,7 +27,6 @@ import org.ethereum.vm.DataWord;
 import org.ethereum.vm.program.Program;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -81,6 +97,7 @@ public class ProgramInvokeFactoryImpl implements ProgramInvokeFactory {
 
         if (logger.isInfoEnabled()) {
             logger.info("Top level call: \n" +
+                            "tx.hash={}\n" +
                             "address={}\n" +
                             "origin={}\n" +
                             "caller={}\n" +
@@ -96,19 +113,20 @@ public class ProgramInvokeFactoryImpl implements ProgramInvokeFactory {
                             "difficulty={}\n" +
                             "gaslimit={}\n",
 
-                    Hex.toHexString(address),
-                    Hex.toHexString(origin),
-                    Hex.toHexString(caller),
+                    ByteUtil.toHexString(tx.getHash()),
+                    ByteUtil.toHexString(address),
+                    ByteUtil.toHexString(origin),
+                    ByteUtil.toHexString(caller),
                     ByteUtil.bytesToBigInteger(balance),
                     ByteUtil.bytesToBigInteger(gasPrice),
                     ByteUtil.bytesToBigInteger(gas),
                     ByteUtil.bytesToBigInteger(callValue),
-                    Hex.toHexString(data),
-                    Hex.toHexString(lastHash),
-                    Hex.toHexString(coinbase),
+                    ByteUtil.toHexString(data),
+                    ByteUtil.toHexString(lastHash),
+                    ByteUtil.toHexString(coinbase),
                     timestamp,
                     number,
-                    Hex.toHexString(difficulty),
+                    ByteUtil.toHexString(difficulty),
                     gaslimit);
         }
 
@@ -124,13 +142,14 @@ public class ProgramInvokeFactoryImpl implements ProgramInvokeFactory {
     public ProgramInvoke createProgramInvoke(Program program, DataWord toAddress, DataWord callerAddress,
                                              DataWord inValue, DataWord inGas,
                                              BigInteger balanceInt, byte[] dataIn,
-                                             Repository repository, BlockStore blockStore, boolean byTestingSuite) {
+                                             Repository repository, BlockStore blockStore,
+                                             boolean isStaticCall, boolean byTestingSuite) {
 
         DataWord address = toAddress;
         DataWord origin = program.getOriginAddress();
         DataWord caller = callerAddress;
 
-        DataWord balance = new DataWord(balanceInt.toByteArray());
+        DataWord balance = DataWord.of(balanceInt.toByteArray());
         DataWord gasPrice = program.getGasPrice();
         DataWord gas = inGas;
         DataWord callValue = inValue;
@@ -159,24 +178,24 @@ public class ProgramInvokeFactoryImpl implements ProgramInvokeFactory {
                             "blockNumber={}\n" +
                             "difficulty={}\n" +
                             "gaslimit={}\n",
-                    Hex.toHexString(address.getLast20Bytes()),
-                    Hex.toHexString(origin.getLast20Bytes()),
-                    Hex.toHexString(caller.getLast20Bytes()),
+                    ByteUtil.toHexString(address.getLast20Bytes()),
+                    ByteUtil.toHexString(origin.getLast20Bytes()),
+                    ByteUtil.toHexString(caller.getLast20Bytes()),
                     balance.toString(),
                     gasPrice.longValue(),
                     gas.longValue(),
-                    Hex.toHexString(callValue.getNoLeadZeroesData()),
-                    data == null ? "" : Hex.toHexString(data),
-                    Hex.toHexString(lastHash.getData()),
-                    Hex.toHexString(coinbase.getLast20Bytes()),
+                    ByteUtil.toHexString(callValue.getNoLeadZeroesData()),
+                    ByteUtil.toHexString(data),
+                    ByteUtil.toHexString(lastHash.getData()),
+                    ByteUtil.toHexString(coinbase.getLast20Bytes()),
                     timestamp.longValue(),
                     number.longValue(),
-                    Hex.toHexString(difficulty.getNoLeadZeroesData()),
+                    ByteUtil.toHexString(difficulty.getNoLeadZeroesData()),
                     gasLimit.bigIntValue());
         }
 
         return new ProgramInvokeImpl(address, origin, caller, balance, gasPrice, gas, callValue,
                 data, lastHash, coinbase, timestamp, number, difficulty, gasLimit,
-                repository, program.getCallDeep() + 1, blockStore, byTestingSuite);
+                repository, program.getCallDeep() + 1, blockStore, isStaticCall, byTestingSuite);
     }
 }

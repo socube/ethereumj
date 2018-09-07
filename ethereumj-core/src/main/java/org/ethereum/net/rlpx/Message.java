@@ -1,14 +1,31 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import org.ethereum.crypto.ECKey;
 import org.ethereum.util.FastByteComparisons;
 import org.spongycastle.util.BigIntegers;
-import org.spongycastle.util.encoders.Hex;
 
 import java.security.SignatureException;
 
 import static org.ethereum.crypto.HashUtil.sha3;
 import static org.ethereum.util.ByteUtil.merge;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 public abstract class Message {
 
@@ -147,10 +164,10 @@ public abstract class Message {
     @Override
     public String toString() {
         return "{" +
-                "mdc=" + Hex.toHexString(mdc) +
-                ", signature=" + Hex.toHexString(signature) +
-                ", type=" + Hex.toHexString(type) +
-                ", data=" + Hex.toHexString(data) +
+                "mdc=" + toHexString(mdc) +
+                ", signature=" + toHexString(signature) +
+                ", type=" + toHexString(type) +
+                ", data=" + toHexString(data) +
                 '}';
     }
 }

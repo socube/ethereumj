@@ -1,4 +1,24 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm.program;
+
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
 
 import org.ethereum.core.Transaction;
 import org.ethereum.crypto.ECKey;
@@ -7,8 +27,8 @@ import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
 import org.ethereum.vm.DataWord;
 
-import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 import static org.apache.commons.lang3.ArrayUtils.*;
 import static org.ethereum.util.ByteUtil.toHexString;
@@ -48,33 +68,33 @@ public class InternalTransaction extends Transaction {
 
 
     public int getDeep() {
-        if (!parsed) rlpParse();
+        rlpParse();
         return deep;
     }
 
     public int getIndex() {
-        if (!parsed) rlpParse();
+        rlpParse();
         return index;
     }
 
     public boolean isRejected() {
-        if (!parsed) rlpParse();
+        rlpParse();
         return rejected;
     }
 
     public String getNote() {
-        if (!parsed) rlpParse();
+        rlpParse();
         return note;
     }
 
     @Override
     public byte[] getSender() {
-        if (!parsed) rlpParse();
+        rlpParse();
         return sendAddress;
     }
 
     public byte[] getParentHash() {
-        if (!parsed) rlpParse();
+        rlpParse();
         return parentHash;
     }
 
@@ -110,18 +130,19 @@ public class InternalTransaction extends Transaction {
     }
 
     @Override
-    public void rlpParse() {
+    public synchronized void rlpParse() {
+        if (parsed) return;
         RLPList decodedTxList = RLP.decode2(rlpEncoded);
         RLPList transaction = (RLPList) decodedTxList.get(0);
 
-        this.nonce = transaction.get(0).getRLPData();
+        setNonce(transaction.get(0).getRLPData());
         this.parentHash = transaction.get(1).getRLPData();
         this.sendAddress = transaction.get(2).getRLPData();
-        this.receiveAddress = transaction.get(3).getRLPData();
-        this.value = transaction.get(4).getRLPData();
-        this.gasPrice = transaction.get(5).getRLPData();
-        this.gasLimit = transaction.get(6).getRLPData();
-        this.data = transaction.get(7).getRLPData();
+        setReceiveAddress(transaction.get(3).getRLPData());
+        setValue(transaction.get(4).getRLPData());
+        setGasPrice(transaction.get(5).getRLPData());
+        setGasLimit(transaction.get(6).getRLPData());
+        setData(transaction.get(7).getRLPData());
         this.note = new String(transaction.get(8).getRLPData());
         this.deep = decodeInt(transaction.get(9).getRLPData());
         this.index = decodeInt(transaction.get(10).getRLPData());
@@ -130,12 +151,24 @@ public class InternalTransaction extends Transaction {
         this.parsed = true;
     }
 
+
+    private static byte[] intToBytes(int value) {
+        return ByteBuffer.allocate(Integer.SIZE / Byte.SIZE)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(value)
+                .array();
+    }
+
+    private static int bytesToInt(byte[] bytes) {
+        return isEmpty(bytes) ? 0 : ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
+    }
+
     private static byte[] encodeInt(int value) {
-        return RLP.encodeElement(ByteBuffer.allocate(4).putInt(value).array());
+        return RLP.encodeElement(intToBytes(value));
     }
 
     private static int decodeInt(byte[] encoded) {
-        return isEmpty(encoded) ? 0 : new BigInteger(encoded).intValue();
+        return bytesToInt(encoded);
     }
 
     @Override
@@ -156,7 +189,7 @@ public class InternalTransaction extends Transaction {
                 ", nonce=" + toHexString(getNonce()) +
                 ", gasPrice=" + toHexString(getGasPrice()) +
                 ", gas=" + toHexString(getGasLimit()) +
-                ", receiveAddress=" + toHexString(getSender()) +
+                ", sendAddress=" + toHexString(getSender()) +
                 ", receiveAddress=" + toHexString(getReceiveAddress()) +
                 ", value=" + toHexString(getValue()) +
                 ", data=" + toHexString(getData()) +

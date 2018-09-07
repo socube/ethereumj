@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.p2p;
 
 import org.ethereum.config.SystemProperties;
@@ -56,18 +73,12 @@ import static org.ethereum.net.message.StaticMessages.*;
 @Scope("prototype")
 public class P2pHandler extends SimpleChannelInboundHandler<P2pMessage> {
 
-    public final static byte VERSION = 4;
-
-    public final static byte[] SUPPORTED_VERSIONS = {4, 5};
+    public final static byte VERSION = 5;
 
     private final static Logger logger = LoggerFactory.getLogger("net");
 
     private static ScheduledExecutorService pingTimer =
-            Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
-                public Thread newThread(Runnable r) {
-                    return new Thread(r, "P2pPingTimer");
-                }
-            });
+            Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, "P2pPingTimer"));
 
     private MessageQueue msgQueue;
 
@@ -210,36 +221,31 @@ public class P2pHandler extends SimpleChannelInboundHandler<P2pMessage> {
         this.ethOutbound = (int) channel.getNodeStatistics().ethOutbound.get();
 
         this.handshakeHelloMessage = msg;
-        if (!isProtocolVersionSupported(msg.getP2PVersion())) {
-            disconnect(ReasonCode.INCOMPATIBLE_PROTOCOL);
-        }
-        else {
-            List<Capability> capInCommon = getSupportedCapabilities(msg);
-            channel.initMessageCodes(capInCommon);
-            for (Capability capability : capInCommon) {
-                if (capability.getName().equals(Capability.ETH)) {
 
-                    // Activate EthHandler for this peer
-                    channel.activateEth(ctx, fromCode(capability.getVersion()));
-                } else if
-                   (capability.getName().equals(Capability.SHH) &&
-                    capability.getVersion() == ShhHandler.VERSION) {
+        List<Capability> capInCommon = getSupportedCapabilities(msg);
+        channel.initMessageCodes(capInCommon);
+        for (Capability capability : capInCommon) {
+            if (capability.getName().equals(Capability.ETH)) {
 
-                    // Activate ShhHandler for this peer
-                    channel.activateShh(ctx);
-                } else if
-                   (capability.getName().equals(Capability.BZZ) &&
-                    capability.getVersion() == BzzHandler.VERSION) {
+                // Activate EthHandler for this peer
+                channel.activateEth(ctx, fromCode(capability.getVersion()));
+            } else if
+               (capability.getName().equals(Capability.SHH) &&
+                capability.getVersion() == ShhHandler.VERSION) {
 
-                    // Activate ShhHandler for this peer
-                    channel.activateBzz(ctx);
-                }
+                // Activate ShhHandler for this peer
+                channel.activateShh(ctx);
+            } else if
+               (capability.getName().equals(Capability.BZZ) &&
+                capability.getVersion() == BzzHandler.VERSION) {
+
+                // Activate ShhHandler for this peer
+                channel.activateBzz(ctx);
             }
-
-            //todo calculate the Offsets
-            ethereumListener.onHandShakePeer(channel, msg);
-
         }
+
+        //todo calculate the Offsets
+        ethereumListener.onHandShakePeer(channel, msg);
     }
 
     /**
@@ -269,16 +275,13 @@ public class P2pHandler extends SimpleChannelInboundHandler<P2pMessage> {
 
     private void startTimers() {
         // sample for pinging in background
-        pingTask = pingTimer.scheduleAtFixedRate(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    msgQueue.sendMessage(PING_MESSAGE);
-                } catch (Throwable t) {
-                    logger.error("Unhandled exception", t);
-                }
+        pingTask = pingTimer.scheduleAtFixedRate(() -> {
+            try {
+                msgQueue.sendMessage(PING_MESSAGE);
+            } catch (Throwable t) {
+                logger.error("Unhandled exception", t);
             }
-        }, 2, config.getProperty("peer.p2p.pingInterval", 5L), TimeUnit.SECONDS);
+        }, 2, config.getProperty("peer.p2p.pingInterval", 5), TimeUnit.SECONDS);
     }
 
     public void killTimers() {
@@ -293,13 +296,6 @@ public class P2pHandler extends SimpleChannelInboundHandler<P2pMessage> {
 
     public void setChannel(Channel channel) {
         this.channel = channel;
-    }
-
-    public static boolean isProtocolVersionSupported(byte ver) {
-        for (byte v : SUPPORTED_VERSIONS) {
-            if (v == ver) return true;
-        }
-        return false;
     }
 
     public List<Capability> getSupportedCapabilities(HelloMessage hello) {

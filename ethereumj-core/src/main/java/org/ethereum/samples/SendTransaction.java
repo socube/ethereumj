@@ -1,11 +1,30 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.samples;
 
 import org.ethereum.core.*;
 import org.ethereum.crypto.ECKey;
+import org.ethereum.crypto.HashUtil;
 import org.ethereum.db.ByteArrayWrapper;
 import org.ethereum.facade.EthereumFactory;
 import org.ethereum.listener.EthereumListenerAdapter;
 import org.ethereum.util.ByteUtil;
+import org.ethereum.util.blockchain.EtherUtil;
 import org.spongycastle.util.encoders.Hex;
 import org.springframework.context.annotation.Bean;
 
@@ -58,7 +77,7 @@ public class SendTransaction extends BasicSample {
 
     private TransactionReceipt sendTxAndWait(byte[] receiveAddress, byte[] data) throws InterruptedException {
 
-        byte[] senderPrivateKey = Hex.decode("");
+        byte[] senderPrivateKey = HashUtil.sha3("cow".getBytes());
         byte[] fromAddress = ECKey.fromPrivate(senderPrivateKey).getAddress();
         BigInteger nonce = ethereum.getRepository().getNonce(fromAddress);
         Transaction tx = new Transaction(
@@ -66,8 +85,9 @@ public class SendTransaction extends BasicSample {
                 ByteUtil.longToBytesNoLeadZeroes(ethereum.getGasPrice()),
                 ByteUtil.longToBytesNoLeadZeroes(200000),
                 receiveAddress,
-                ByteUtil.bigIntegerToBytes(BigInteger.valueOf(1)),  // 1_000_000_000 gwei, 1_000_000_000_000L szabo, 1_000_000_000_000_000L finney, 1_000_000_000_000_000_000L ether
-                data);
+                ByteUtil.bigIntegerToBytes(EtherUtil.convert(1, EtherUtil.Unit.WEI)),  // Use EtherUtil.convert for easy value unit conversion
+                data,
+                ethereum.getChainIdForNextBlock());
 
         tx.sign(ECKey.fromPrivate(senderPrivateKey));
         logger.info("<=== Sending transaction: " + tx);

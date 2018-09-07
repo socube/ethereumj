@@ -1,5 +1,23 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm.program;
 
+import org.ethereum.util.ByteArraySet;
 import org.ethereum.vm.CallCreate;
 import org.ethereum.vm.DataWord;
 import org.ethereum.vm.LogInfo;
@@ -22,8 +40,10 @@ public class ProgramResult {
     private long gasUsed;
     private byte[] hReturn = EMPTY_BYTE_ARRAY;
     private RuntimeException exception;
+    private boolean revert;
 
     private Set<DataWord> deleteAccounts;
+    private ByteArraySet touchedAccounts = new ByteArraySet();
     private List<InternalTransaction> internalTransactions;
     private List<LogInfo> logInfoList;
     private long futureRefund = 0;
@@ -37,6 +57,14 @@ public class ProgramResult {
 
     public void spendGas(long gas) {
         gasUsed += gas;
+    }
+
+    public void setRevert() {
+        this.revert = true;
+    }
+
+    public boolean isRevert() {
+        return revert;
     }
 
     public void refundGas(long gas) {
@@ -78,6 +106,20 @@ public class ProgramResult {
     public void addDeleteAccounts(Set<DataWord> accounts) {
         if (!isEmpty(accounts)) {
             getDeleteAccounts().addAll(accounts);
+        }
+    }
+
+    public void addTouchAccount(byte[] addr) {
+        touchedAccounts.add(addr);
+    }
+
+    public Set<byte[]> getTouchedAccounts() {
+        return touchedAccounts;
+    }
+
+    public void addTouchAccounts(Set<byte[]> accounts) {
+        if (!isEmpty(accounts)) {
+            getTouchedAccounts().addAll(accounts);
         }
     }
 
@@ -133,12 +175,6 @@ public class ProgramResult {
         }
     }
 
-    public void rejectLogInfos() {
-        for (LogInfo logInfo : getLogInfoList()) {
-            logInfo.reject();
-        }
-    }
-
     public void addFutureRefund(long gasValue) {
         futureRefund += gasValue;
     }
@@ -153,12 +189,15 @@ public class ProgramResult {
 
     public void merge(ProgramResult another) {
         addInternalTransactions(another.getInternalTransactions());
-        addDeleteAccounts(another.getDeleteAccounts());
-        addLogInfos(another.getLogInfoList());
-        addFutureRefund(another.getFutureRefund());
+        if (another.getException() == null && !another.isRevert()) {
+            addDeleteAccounts(another.getDeleteAccounts());
+            addLogInfos(another.getLogInfoList());
+            addFutureRefund(another.getFutureRefund());
+            addTouchAccounts(another.getTouchedAccounts());
+        }
     }
     
-    public static ProgramResult empty() {
+    public static ProgramResult createEmpty() {
         ProgramResult result = new ProgramResult();
         result.setHReturn(EMPTY_BYTE_ARRAY);
         return result;

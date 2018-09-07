@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.jsontestsuite;
 
 import org.ethereum.core.BlockHeader;
@@ -19,7 +36,7 @@ import static org.junit.Assert.assertArrayEquals;
 public class GitHubPowTest {
 
     private static final Logger logger = LoggerFactory.getLogger("TCK-Test");
-    public String shacommit = "92bb72cccf4b5a2d29d74248fdddfe8b43baddda";
+    public String shacommit = "b09975f0a37afe306f52d5b771f5e3836f53c8bc";
 
     @Test
     public void runEthashTest() throws IOException {

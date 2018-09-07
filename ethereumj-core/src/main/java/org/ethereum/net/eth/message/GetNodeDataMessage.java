@@ -1,12 +1,30 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.message;
 
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
 import org.ethereum.util.Utils;
-import org.spongycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Wrapper around an Ethereum GetNodeData message on the network
@@ -20,25 +38,26 @@ import java.util.List;
 public class GetNodeDataMessage extends EthMessage {
 
     /**
-     * List of state roots for which is state requested
+     * List of node hashes for which is state requested
      */
-    private List<byte[]> stateRoots;
+    private List<byte[]> nodeKeys;
 
     public GetNodeDataMessage(byte[] encoded) {
         super(encoded);
     }
 
-    public GetNodeDataMessage(List<byte[]> stateRoots) {
-        this.stateRoots = stateRoots;
+    public GetNodeDataMessage(List<byte[]> nodeKeys) {
+        this.nodeKeys = nodeKeys;
         this.parsed = true;
     }
 
-    private void parse() {
+    private synchronized void parse() {
+        if (parsed) return;
         RLPList paramsList = (RLPList) RLP.decode2(encoded).get(0);
 
-        this.stateRoots = new ArrayList<>();
+        this.nodeKeys = new ArrayList<>();
         for (int i = 0; i < paramsList.size(); ++i) {
-            stateRoots.add(paramsList.get(i).getRLPData());
+            nodeKeys.add(paramsList.get(i).getRLPData());
         }
 
         this.parsed = true;
@@ -46,7 +65,7 @@ public class GetNodeDataMessage extends EthMessage {
 
     private void encode() {
         List<byte[]> encodedElements = new ArrayList<>();
-        for (byte[] hash : stateRoots)
+        for (byte[] hash : nodeKeys)
             encodedElements.add(RLP.encodeElement(hash));
         byte[][] encodedElementArray = encodedElements.toArray(new byte[encodedElements.size()][]);
 
@@ -65,9 +84,9 @@ public class GetNodeDataMessage extends EthMessage {
         return NodeDataMessage.class;
     }
 
-    public List<byte[]> getStateRoots() {
-        if (!parsed) parse();
-        return stateRoots;
+    public List<byte[]> getNodeKeys() {
+        parse();
+        return nodeKeys;
     }
 
     @Override
@@ -76,21 +95,21 @@ public class GetNodeDataMessage extends EthMessage {
     }
 
     public String toString() {
-        if (!parsed) parse();
+        parse();
 
         StringBuilder payload = new StringBuilder();
 
-        payload.append("count( ").append(stateRoots.size()).append(" ) ");
+        payload.append("count( ").append(nodeKeys.size()).append(" ) ");
 
         if (logger.isDebugEnabled()) {
-            for (byte[] hash : stateRoots) {
-                payload.append(Hex.toHexString(hash).substring(0, 6)).append(" | ");
+            for (byte[] hash : nodeKeys) {
+                payload.append(toHexString(hash).substring(0, 6)).append(" | ");
             }
-            if (!stateRoots.isEmpty()) {
+            if (!nodeKeys.isEmpty()) {
                 payload.delete(payload.length() - 3, payload.length());
             }
         } else {
-            payload.append(Utils.getHashListShort(stateRoots));
+            payload.append(Utils.getHashListShort(nodeKeys));
         }
 
         return "[" + getCommand().name() + " " + payload + "]";

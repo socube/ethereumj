@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx.discover;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -88,13 +105,10 @@ public class PeerConnectionTester {
         ReconnectMaxPeers = config.peerDiscoveryTouchMaxNodes();
         peerConnectionPool = new ThreadPoolExecutor(ConnectThreads,
                 ConnectThreads, 0L, TimeUnit.SECONDS,
-                new MutablePriorityQueue<Runnable, ConnectTask>(new Comparator<ConnectTask>() {
-                    @Override
-                    public int compare(ConnectTask h1, ConnectTask h2) {
-                        return h2.nodeHandler.getNodeStatistics().getReputation() -
-                                h1.nodeHandler.getNodeStatistics().getReputation();
-                    }
-                }), new ThreadFactoryBuilder().setDaemon(true).setNameFormat("discovery-tester-%d").build());
+                new MutablePriorityQueue<>((Comparator<ConnectTask>) (h1, h2) ->
+                        h2.nodeHandler.getNodeStatistics().getReputation() -
+                                h1.nodeHandler.getNodeStatistics().getReputation()),
+                new ThreadFactoryBuilder().setDaemon(true).setNameFormat("discovery-tester-%d").build());
     }
 
     public void close() {
@@ -112,6 +126,7 @@ public class PeerConnectionTester {
     }
 
     public void nodeStatusChanged(final NodeHandler nodeHandler) {
+        if (peerConnectionPool.isShutdown()) return;
         if (connectedCandidates.size() < NodeManager.MAX_NODES
                 && !connectedCandidates.containsKey(nodeHandler)
                 && !nodeHandler.getNode().isDiscoveryNode()) {

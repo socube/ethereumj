@@ -1,10 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.swarm.bzz;
 
 import org.ethereum.net.client.Capability;
 import org.ethereum.net.swarm.Key;
 import org.ethereum.net.swarm.NetStore;
 import org.ethereum.net.swarm.Util;
-import org.ethereum.util.Functional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.spongycastle.util.encoders.Hex;
@@ -13,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import static java.lang.Math.min;
 
@@ -23,7 +40,7 @@ import static java.lang.Math.min;
  *
  * Created by Anton Nashatyrev on 18.06.2015.
  */
-public class BzzProtocol implements Functional.Consumer<BzzMessage> {
+public class BzzProtocol implements Consumer<BzzMessage> {
     private final static Logger LOG = LoggerFactory.getLogger("net.bzz");
 
     private final static AtomicLong idGenerator = new AtomicLong(0);
@@ -35,7 +52,7 @@ public class BzzProtocol implements Functional.Consumer<BzzMessage> {
     public final static int Strategy           = 0;
 
     private NetStore netStore;
-    private Functional.Consumer<BzzMessage> messageSender;
+    private Consumer<BzzMessage> messageSender;
     private PeerAddress node;
 
     private boolean handshaken = false;
@@ -53,7 +70,7 @@ public class BzzProtocol implements Functional.Consumer<BzzMessage> {
      * In the testing environment this could be a special handler which delivers the message
      * without network stack
      */
-    public void setMessageSender(Functional.Consumer<BzzMessage> messageSender) {
+    public void setMessageSender(Consumer<BzzMessage> messageSender) {
         this.messageSender = messageSender;
     }
 

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.crypto;
 
 import org.ethereum.util.Utils;
@@ -12,7 +29,7 @@ import org.spongycastle.crypto.KeyEncoder;
 import org.spongycastle.crypto.KeyGenerationParameters;
 import org.spongycastle.crypto.agreement.ECDHBasicAgreement;
 import org.spongycastle.crypto.digests.SHA256Digest;
-import org.spongycastle.crypto.engines.AESFastEngine;
+import org.spongycastle.crypto.engines.AESEngine;
 import org.spongycastle.crypto.engines.IESEngine;
 import org.spongycastle.crypto.generators.ECKeyPairGenerator;
 import org.spongycastle.crypto.generators.EphemeralKeyPairGenerator;
@@ -135,7 +152,7 @@ public class CryptoTest {
         KeyParameter key = new KeyParameter(keyBytes);
         ParametersWithIV params = new ParametersWithIV(key, new byte[16]);
 
-        AESFastEngine engine = new AESFastEngine();
+        AESEngine engine = new AESEngine();
         SICBlockCipher ctrEngine = new SICBlockCipher(engine);
 
         ctrEngine.init(true, params);
@@ -157,7 +174,7 @@ public class CryptoTest {
     @Test  // big packet encryption
     public void test12() throws Throwable {
 
-        AESFastEngine engine = new AESFastEngine();
+        AESEngine engine = new AESEngine();
         SICBlockCipher ctrEngine = new SICBlockCipher(engine);
 
         byte[] keyBytes = Hex.decode("a4627abc2a3c25315bff732cb22bc128f203912dd2a840f31e66efb27a47d2b1");
@@ -220,7 +237,7 @@ public class CryptoTest {
     @Test  // ECIES_AES128_SHA256 + No Ephemeral Key + IV(all zeroes)
     public void test14() throws Throwable{
 
-        AESFastEngine aesFastEngine = new AESFastEngine();
+        AESEngine aesFastEngine = new AESEngine();
 
         IESEngine iesEngine = new IESEngine(
                 new ECDHBasicAgreement(),
@@ -290,7 +307,7 @@ public class CryptoTest {
         AsymmetricCipherKeyPair myKey = new AsymmetricCipherKeyPair(ecPubKey, ecPrivKey);
 
 
-        AESFastEngine aesFastEngine = new AESFastEngine();
+        AESEngine aesFastEngine = new AESEngine();
 
         IESEngine iesEngine = new IESEngine(
                 new ECDHBasicAgreement(),

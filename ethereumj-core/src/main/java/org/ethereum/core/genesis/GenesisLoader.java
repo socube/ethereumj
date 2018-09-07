@@ -1,16 +1,36 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core.genesis;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.io.ByteStreams;
-import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.type.JavaType;
+import org.ethereum.config.BlockchainNetConfig;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.AccountState;
 import org.ethereum.core.Genesis;
+import org.ethereum.crypto.HashUtil;
 import org.ethereum.db.ByteArrayWrapper;
 import org.ethereum.trie.SecureTrie;
 import org.ethereum.trie.Trie;
 import org.ethereum.util.ByteUtil;
-import org.slf4j.LoggerFactory;
+import org.ethereum.util.Utils;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -21,90 +41,90 @@ import java.util.Map;
 
 import static org.ethereum.core.Genesis.ZERO_HASH_2048;
 import static org.ethereum.crypto.HashUtil.EMPTY_LIST_HASH;
-import static org.ethereum.util.ByteUtil.wrap;
+import static org.ethereum.util.ByteUtil.*;
 import static org.ethereum.core.BlockHeader.NONCE_LENGTH;
+import static org.ethereum.core.Genesis.PremineAccount;
 
 public class GenesisLoader {
 
     /**
      * Load genesis from passed location or from classpath `genesis` directory
      */
-    public static Genesis loadGenesis(SystemProperties config, ClassLoader classLoader) throws RuntimeException {
+    public static GenesisJson loadGenesisJson(SystemProperties config, ClassLoader classLoader) throws RuntimeException {
         final String genesisFile = config.getProperty("genesisFile", null);
         final String genesisResource = config.genesisInfo();
 
         // #1 try to find genesis at passed location
         if (genesisFile != null) {
             try (InputStream is = new FileInputStream(new File(genesisFile))) {
-                return GenesisLoader.loadGenesis(config, is);
+                return loadGenesisJson(is);
             } catch (Exception e) {
-                showGenesisErrorAndExit("Problem loading " + genesisFile, genesisFile, genesisResource);
+                showLoadError("Problem loading genesis file from " + genesisFile, genesisFile, genesisResource);
             }
         }
 
         // #2 fall back to old genesis location at `src/main/resources/genesis` directory
-        try {
-            InputStream is = classLoader.getResourceAsStream("genesis/" + genesisResource);
-            if (is != null) {
-                return loadGenesis(config, is);
-            } else {
-                showGenesisErrorAndExit("Genesis file is not found in resource directory", genesisFile, genesisResource);
+        InputStream is = classLoader.getResourceAsStream("genesis/" + genesisResource);
+        if (is != null) {
+            try {
+                return loadGenesisJson(is);
+            } catch (Exception e) {
+                showLoadError("Problem loading genesis file from resource directory", genesisFile, genesisResource);
             }
-        } catch (Exception e) {
-            showGenesisErrorAndExit("Problem loading genesis file from resource directory", genesisFile, genesisResource);
+        } else {
+            showLoadError("Genesis file was not found in resource directory", genesisFile, genesisResource);
         }
+
         return null;
     }
 
-    private static void showGenesisErrorAndExit(String message, String genesisFile, String genesisResource) {
-        LoggerFactory.getLogger("general").error(message);
-
-        System.err.println("");
-        System.err.println("");
-        System.err.println("Genesis block configuration is corrupted or not found.");
-        System.err.println("Config option 'genesisFile': " + genesisFile);
-        System.err.println("Config option 'genesis': " + genesisResource);
-        System.err.println(message);
-        System.err.println("");
-        System.err.println("");
-
-        // hope to remove this
-        throw new RuntimeException("Wasn't able to load genesis. " + message);
+    private static void showLoadError(String message, String genesisFile, String genesisResource) {
+        Utils.showErrorAndExit(
+            message,
+            "Config option 'genesisFile': " + genesisFile,
+            "Config option 'genesis': " + genesisResource);
     }
 
-    /**
-     * Method used much in tests.
-     */
-    public static Genesis loadGenesis(InputStream genesisJsonIS) throws RuntimeException {
+    public static Genesis parseGenesis(BlockchainNetConfig blockchainNetConfig, GenesisJson genesisJson) throws RuntimeException {
         try {
-            return loadGenesis(SystemProperties.getDefault(), genesisJsonIS);
-        } catch (Exception e) {
-            System.err.println("Genesis block configuration is corrupted or not found");
-            e.printStackTrace();
-            throw new RuntimeException("Wasn't able to load genesis");
-        }
-    }
-
-    private static Genesis loadGenesis(SystemProperties config, InputStream genesisJsonIS) throws RuntimeException {
-        try {
-            String json = new String(ByteStreams.toByteArray(genesisJsonIS));
-
-            ObjectMapper mapper = new ObjectMapper();
-            JavaType type = mapper.getTypeFactory().constructType(GenesisJson.class);
-
-            GenesisJson genesisJson  = new ObjectMapper().readValue(json, type);
-
             Genesis genesis = createBlockForJson(genesisJson);
 
-            Map<ByteArrayWrapper, AccountState> premine = generatePreMine(config, genesisJson.getAlloc());
-            genesis.setPremine(premine);
+            genesis.setPremine(generatePreMine(blockchainNetConfig, genesisJson.getAlloc()));
 
-            byte[] rootHash = generateRootHash(premine);
+            byte[] rootHash = generateRootHash(genesis.getPremine());
             genesis.setStateRoot(rootHash);
 
             return genesis;
         } catch (Exception e) {
             e.printStackTrace();
+            Utils.showErrorAndExit("Problem parsing genesis", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Method used much in tests.
+     */
+    public static Genesis loadGenesis(InputStream resourceAsStream) {
+        GenesisJson genesisJson = loadGenesisJson(resourceAsStream);
+        return parseGenesis(SystemProperties.getDefault().getBlockchainConfig(), genesisJson);
+    }
+
+    public static GenesisJson loadGenesisJson(InputStream genesisJsonIS) throws RuntimeException {
+        String json = null;
+        try {
+            json = new String(ByteStreams.toByteArray(genesisJsonIS));
+
+            ObjectMapper mapper = new ObjectMapper()
+                    .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
+
+            GenesisJson genesisJson  = mapper.readValue(json, GenesisJson.class);
+            return genesisJson;
+        } catch (Exception e) {
+
+            Utils.showErrorAndExit("Problem parsing genesis: "+ e.getMessage(), json);
+
             throw new RuntimeException(e.getMessage(), e);
         }
     }
@@ -113,22 +133,36 @@ public class GenesisLoader {
     private static Genesis createBlockForJson(GenesisJson genesisJson) {
 
         byte[] nonce       = prepareNonce(ByteUtil.hexStringToBytes(genesisJson.nonce));
-        byte[] difficulty  = ByteUtil.hexStringToBytes(genesisJson.difficulty);
-        byte[] mixHash     = ByteUtil.hexStringToBytes(genesisJson.mixhash);
-        byte[] coinbase    = ByteUtil.hexStringToBytes(genesisJson.coinbase);
+        byte[] difficulty  = hexStringToBytesValidate(genesisJson.difficulty, 32, true);
+        byte[] mixHash     = hexStringToBytesValidate(genesisJson.mixhash, 32, false);
+        byte[] coinbase    = hexStringToBytesValidate(genesisJson.coinbase, 20, false);
 
-        byte[] timestampBytes = ByteUtil.hexStringToBytes(genesisJson.timestamp);
+        byte[] timestampBytes = hexStringToBytesValidate(genesisJson.timestamp, 8, true);
         long   timestamp         = ByteUtil.byteArrayToLong(timestampBytes);
 
-        byte[] parentHash  = ByteUtil.hexStringToBytes(genesisJson.parentHash);
-        byte[] extraData   = ByteUtil.hexStringToBytes(genesisJson.extraData);
+        byte[] parentHash  = hexStringToBytesValidate(genesisJson.parentHash, 32, false);
+        byte[] extraData   = hexStringToBytesValidate(genesisJson.extraData, 32, true);
 
-        byte[] gasLimitBytes    = ByteUtil.hexStringToBytes(genesisJson.gasLimit);
+        byte[] gasLimitBytes    = hexStringToBytesValidate(genesisJson.gasLimit, 8, true);
         long   gasLimit         = ByteUtil.byteArrayToLong(gasLimitBytes);
 
         return new Genesis(parentHash, EMPTY_LIST_HASH, coinbase, ZERO_HASH_2048,
                             difficulty, 0, gasLimit, 0, timestamp, extraData,
                             mixHash, nonce);
+    }
+
+    private static byte[] hexStringToBytesValidate(String hex, int bytes, boolean notGreater) {
+        byte[] ret = ByteUtil.hexStringToBytes(hex);
+        if (notGreater) {
+            if (ret.length > bytes) {
+                throw new RuntimeException("Wrong value length: " + hex + ", expected length < " + bytes + " bytes");
+            }
+        } else {
+            if (ret.length != bytes) {
+                throw new RuntimeException("Wrong value length: " + hex + ", expected length " + bytes + " bytes");
+            }
+        }
+        return ret;
     }
 
     /**
@@ -152,30 +186,55 @@ public class GenesisLoader {
     }
 
 
-    private static Map<ByteArrayWrapper, AccountState> generatePreMine(SystemProperties config, Map<String, AllocatedAccount> alloc){
+    private static Map<ByteArrayWrapper, PremineAccount> generatePreMine(BlockchainNetConfig blockchainNetConfig, Map<String, GenesisJson.AllocatedAccount> allocs){
 
-        Map<ByteArrayWrapper, AccountState> premine = new HashMap<>();
-        for (String key : alloc.keySet()){
+        final Map<ByteArrayWrapper, PremineAccount> premine = new HashMap<>();
 
-            BigInteger balance = new BigInteger(alloc.get(key).getBalance());
-            AccountState acctState = new AccountState(
-                    config.getBlockchainConfig().getCommonConstants().getInitialNonce(), balance);
+        for (String key : allocs.keySet()){
 
-            premine.put(wrap(ByteUtil.hexStringToBytes(key)), acctState);
+            final byte[] address = hexStringToBytes(key);
+            final GenesisJson.AllocatedAccount alloc = allocs.get(key);
+            final PremineAccount state = new PremineAccount();
+            AccountState accountState = new AccountState(
+                    blockchainNetConfig.getCommonConstants().getInitialNonce(), parseHexOrDec(alloc.balance));
+
+            if (alloc.nonce != null) {
+                accountState = accountState.withNonce(parseHexOrDec(alloc.nonce));
+            }
+
+            if (alloc.code != null) {
+                final byte[] codeBytes = hexStringToBytes(alloc.code);
+                accountState = accountState.withCodeHash(HashUtil.sha3(codeBytes));
+                state.code = codeBytes;
+            }
+
+            state.accountState = accountState;
+            premine.put(wrap(address), state);
         }
 
         return premine;
     }
 
-    private static byte[] generateRootHash(Map<ByteArrayWrapper, AccountState> premine){
+    /**
+     * @param rawValue either hex started with 0x or dec
+     * return BigInteger
+     */
+    private static BigInteger parseHexOrDec(String rawValue) {
+        if (rawValue != null) {
+            return rawValue.startsWith("0x") ? bytesToBigInteger(hexStringToBytes(rawValue)) : new BigInteger(rawValue);
+        } else {
+            return BigInteger.ZERO;
+        }
+    }
+
+    public static byte[] generateRootHash(Map<ByteArrayWrapper, PremineAccount> premine){
 
         Trie<byte[]> state = new SecureTrie((byte[]) null);
 
         for (ByteArrayWrapper key : premine.keySet()) {
-            state.put(key.getData(), premine.get(key).getEncoded());
+            state.put(key.getData(), premine.get(key).accountState.getEncoded());
         }
 
         return state.getRootHash();
     }
-
 }

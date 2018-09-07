@@ -1,8 +1,24 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import org.ethereum.config.CommonConfig;
-import org.ethereum.datasource.HashMapDB;
-import org.ethereum.datasource.MapDB;
+import org.ethereum.datasource.inmem.HashMapDB;
 import org.ethereum.db.RepositoryRoot;
 import org.ethereum.db.ByteArrayWrapper;
 import org.ethereum.db.IndexedBlockStore;
@@ -103,9 +119,9 @@ public class PendingStateLongRunTest {
 
     private Blockchain createBlockchain(Genesis genesis) {
         IndexedBlockStore blockStore = new IndexedBlockStore();
-        blockStore.init(new HashMapDB(), new HashMapDB());
+        blockStore.init(new HashMapDB<byte[]>(), new HashMapDB<byte[]>());
 
-        Repository repository = new RepositoryRoot(new MapDB());
+        Repository repository = new RepositoryRoot(new HashMapDB());
 
         ProgramInvokeFactoryImpl programInvokeFactory = new ProgramInvokeFactoryImpl();
 
@@ -116,23 +132,20 @@ public class PendingStateLongRunTest {
 
         blockchain.byTest = true;
 
-        PendingStateImpl pendingState = new PendingStateImpl(new EthereumListenerAdapter(), blockchain);
+        PendingStateImpl pendingState = new PendingStateImpl(new EthereumListenerAdapter());
 
         pendingState.setBlockchain(blockchain);
         blockchain.setPendingState(pendingState);
 
         Repository track = repository.startTracking();
-        for (ByteArrayWrapper key : genesis.getPremine().keySet()) {
-            track.createAccount(key.getData());
-            track.addBalance(key.getData(), genesis.getPremine().get(key).getBalance());
-        }
+        Genesis.populateRepository(track, genesis);
 
         track.commit();
 
-        blockStore.saveBlock(Genesis.getInstance(), Genesis.getInstance().getCumulativeDifficulty(), true);
+        blockStore.saveBlock(Genesis.getInstance(), Genesis.getInstance().getDifficultyBI(), true);
 
         blockchain.setBestBlock(Genesis.getInstance());
-        blockchain.setTotalDifficulty(Genesis.getInstance().getCumulativeDifficulty());
+        blockchain.setTotalDifficulty(Genesis.getInstance().getDifficultyBI());
 
         return blockchain;
     }

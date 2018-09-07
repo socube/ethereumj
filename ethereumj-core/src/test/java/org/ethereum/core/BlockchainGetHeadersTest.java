@@ -1,6 +1,23 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
-import org.ethereum.datasource.MapDB;
+import org.ethereum.datasource.inmem.HashMapDB;
 import org.ethereum.db.RepositoryRoot;
 import org.ethereum.db.BlockStoreDummy;
 import org.junit.Test;
@@ -73,7 +90,7 @@ public class BlockchainGetHeadersTest {
 
         public BlockchainImplTester() {
             blockStore = new BlockStoreMock();
-            setRepository(new RepositoryRoot(new MapDB<byte[]>()));
+            setRepository(new RepositoryRoot(new HashMapDB<byte[]>()));
             setBestBlock(blockStore.getChainBlockByNumber(9));
         }
     }
@@ -110,8 +127,8 @@ public class BlockchainGetHeadersTest {
 
         // Skip doesn't matter for single block
         List<BlockHeader> headersSkip = blockchain.getListOfHeadersStartFrom(hashIdentifier, 15, 1, false);
-        assert headersReverse.size() == 1;
-        assert headersReverse.get(0).getNumber() == blockNumber;
+        assert headersSkip.size() == 1;
+        assert headersSkip.get(0).getNumber() == blockNumber;
     }
 
     @Test
@@ -164,5 +181,41 @@ public class BlockchainGetHeadersTest {
         List<BlockHeader> headersMore = blockchain.getListOfHeadersStartFrom(identifierMore, skip, 3, false);
         assert headersMore.size() == 1;
         assert headersMore.get(0).getNumber() == 8L;
+    }
+
+    @Test
+    public void closeToBounds() {
+        int skip = 1;
+        BlockIdentifier identifier = new BlockIdentifier(null, 2L);
+        List<BlockHeader> headers = blockchain.getListOfHeadersStartFrom(identifier, skip, 3, true);
+
+        assert headers.size() == 2;
+        assert headers.get(0).getNumber() == 2L;
+        assert headers.get(1).getNumber() == 0L;
+
+        BlockIdentifier identifier2 = new BlockIdentifier(null, 0L);
+        List<BlockHeader> headers2 = blockchain.getListOfHeadersStartFrom(identifier2, skip, 3, true);
+
+        assert headers2.size() == 1;
+        assert headers2.get(0).getNumber() == 0L;
+
+        BlockIdentifier identifier3 = new BlockIdentifier(null, 0L);
+        List<BlockHeader> headers3 = blockchain.getListOfHeadersStartFrom(identifier3, skip, 1, true);
+
+        assert headers3.size() == 1;
+        assert headers3.get(0).getNumber() == 0L;
+
+        BlockIdentifier identifier4 = new BlockIdentifier(null, blockchain.getBestBlock().getNumber());
+        List<BlockHeader> headers4 = blockchain.getListOfHeadersStartFrom(identifier4, skip, 3, false);
+
+        assert headers4.size() == 1;
+        assert headers4.get(0).getNumber() == blockchain.getBestBlock().getNumber();
+
+        BlockIdentifier identifier5 = new BlockIdentifier(null, blockchain.getBestBlock().getNumber() - 1);
+        List<BlockHeader> headers5 = blockchain.getListOfHeadersStartFrom(identifier5, 0, 3, false);
+
+        assert headers5.size() == 2;
+        assert headers5.get(0).getNumber() == blockchain.getBestBlock().getNumber() - 1;
+        assert headers5.get(1).getNumber() == blockchain.getBestBlock().getNumber();
     }
 }

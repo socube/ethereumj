@@ -1,9 +1,27 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.handler;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import org.ethereum.core.*;
 import org.ethereum.net.eth.EthVersion;
 import org.ethereum.net.eth.message.EthMessageCodes;
+import org.ethereum.sync.PeerState;
 import org.ethereum.sync.SyncStatistics;
 
 import java.math.BigInteger;
@@ -50,7 +68,7 @@ public interface Eth {
     boolean isHashRetrievingDone();
 
     /**
-     * @return true if syncState is HASH_RETRIEVING, false otherwise
+     * @return true if syncState is HEADER_RETRIEVING, false otherwise
      */
     boolean isHashRetrieving();
 
@@ -133,4 +151,5 @@ public interface Eth {
      * @param headers related headers
      */
     void fetchBodies(List<BlockHeaderWrapper> headers);
+
 }

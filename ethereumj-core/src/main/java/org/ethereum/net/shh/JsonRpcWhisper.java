@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.shh;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -38,14 +55,11 @@ public class JsonRpcWhisper extends Whisper {
     public JsonRpcWhisper(URL rpcUrl) {
         this.rpcUrl = rpcUrl;
 
-        poller.scheduleAtFixedRate(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    pollFilters();
-                } catch (Exception e) {
-                    logger.error("Unhandled exception", e);
-                }
+        poller.scheduleAtFixedRate(() -> {
+            try {
+                pollFilters();
+            } catch (Exception e) {
+                logger.error("Unhandled exception", e);
             }
         }, 1, 1, TimeUnit.SECONDS);
     }
@@ -156,23 +170,24 @@ public class JsonRpcWhisper extends Whisper {
 
             // Send post request
             con.setDoOutput(true);
-            DataOutputStream wr = new DataOutputStream(con.getOutputStream());
-            wr.writeBytes(urlParams);
-            wr.flush();
-            wr.close();
+            try (DataOutputStream wr = new DataOutputStream(con.getOutputStream())) {
+                wr.writeBytes(urlParams);
+                wr.flush();
+            }
 
             int responseCode = con.getResponseCode();
             if (responseCode != 200) {
                 throw new RuntimeException("HTTP Response: " + responseCode);
             }
-            BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()));
-            String inputLine;
-            StringBuffer response = new StringBuffer();
+            final StringBuffer response;
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()))) {
+                String inputLine;
+                response = new StringBuffer();
 
-            while ((inputLine = in.readLine()) != null) {
-                response.append(inputLine);
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
             }
-            in.close();
             return response.toString();
         } catch (IOException e) {
             throw new RuntimeException("Error sending POST to " + rpcUrl, e);

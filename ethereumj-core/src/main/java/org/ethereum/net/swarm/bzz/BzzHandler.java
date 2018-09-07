@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.swarm.bzz;
 
 import io.netty.channel.ChannelHandlerContext;
@@ -5,12 +22,13 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import org.ethereum.listener.EthereumListener;
 import org.ethereum.net.MessageQueue;
 import org.ethereum.net.swarm.NetStore;
-import org.ethereum.util.Functional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
+
+import java.util.function.Consumer;
 
 /**
  * Process the messages between peers with 'bzz' capability on the network.
@@ -18,7 +36,7 @@ import org.springframework.stereotype.Component;
 @Component
 @Scope("prototype")
 public class BzzHandler extends SimpleChannelInboundHandler<BzzMessage>
-        implements Functional.Consumer<BzzMessage> {
+        implements Consumer<BzzMessage> {
 
     public final static byte VERSION = 0;
     private MessageQueue msgQueue = null;

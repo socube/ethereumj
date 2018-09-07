@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import org.ethereum.crypto.ECKey;
@@ -9,7 +26,6 @@ import org.spongycastle.util.encoders.Hex;
 
 import java.math.BigInteger;
 import java.nio.charset.Charset;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -22,15 +38,13 @@ public class RLPXTest {
 
     private static final org.slf4j.Logger logger = LoggerFactory.getLogger("test");
 
-    @Ignore
     @Test // ping test
     public void test1() {
 
-        String ip = "85.65.19.231";
-        int port = 30303;
+        Node node = Node.instanceOf("85.65.19.231:30303");
         ECKey key = ECKey.fromPrivate(BigInteger.TEN);
 
-        Message ping = PingMessage.create(ip, port, key);
+        Message ping = PingMessage.create(node, node, key);
         logger.info("{}", ping);
 
         byte[] wire = ping.getPacket();
@@ -43,7 +57,6 @@ public class RLPXTest {
         assertEquals(key.toString(), key2.toString());
     }
 
-    @Ignore
     @Test // pong test
     public void test2() {
 
@@ -63,7 +76,6 @@ public class RLPXTest {
         assertEquals(key.toString(), key2.toString());
     }
 
-    @Ignore
     @Test // neighbors message
     public void test3() {
 
@@ -71,8 +83,7 @@ public class RLPXTest {
         int port = 30303;
 
         byte[] part1 = sha3("007".getBytes(Charset.forName("UTF-8")));
-        byte[] part2 = sha3("007".getBytes(Charset.forName("UTF-8")));
-        byte[] id = merge(part1, part2);
+        byte[] id = ECKey.fromPrivate(part1).getNodeId();
 
         Node node = new Node(id, ip, port);
 
@@ -92,7 +103,6 @@ public class RLPXTest {
         assertEquals(key.toString(), key2.toString());
     }
 
-    @Ignore
     @Test // find node message
     public void test4() {
 
@@ -123,7 +133,7 @@ public class RLPXTest {
         logger.info("{}", findNode);
 
         byte[] wire = findNode.getPacket();
-        wire[64] = 0;
+        wire[64]++;
 
         FindNodeMessage findNode2 = (FindNodeMessage) Message.decode(wire);
         logger.info("{}", findNode2);
@@ -135,7 +145,7 @@ public class RLPXTest {
     @Test
     public void test6() {
 
-        byte[] id_1 = sha3("+++".getBytes(Charset.forName("UTF-8")));
+        byte[] id_1 = ECKey.fromPrivate(sha3("+++".getBytes(Charset.forName("UTF-8")))).getNodeId();
         String host_1 = "85.65.19.231";
         int port_1 = 30303;
 
@@ -152,7 +162,6 @@ public class RLPXTest {
     }
 
 
-    @Ignore
     @Test  // Neighbors parse data
     public void test7() {
 
@@ -201,16 +210,18 @@ public class RLPXTest {
 //        wire: 4c62e1b75f4003ef77032006a142bbf31772936a1e5098566b28a04a5c71c73f1f2c9f539a85458c50a554de12da9d7e69fb2507f7c0788885508d385bbe7a9538fa675712aa1eaad29902bb46eee4531d00a10fd81179e4151929f60fec4dc50001ce87302e302e302e30808454f8483c
 //        PingMessage: {mdc=4c62e1b75f4003ef77032006a142bbf31772936a1e5098566b28a04a5c71c73f, signature=1f2c9f539a85458c50a554de12da9d7e69fb2507f7c0788885508d385bbe7a9538fa675712aa1eaad29902bb46eee4531d00a10fd81179e4151929f60fec4dc500, type=01, data=ce87302e302e302e30808454f8483c}
 
+        // FIXME: wire contains empty from data
         byte[] wire =
                 Hex.decode("4c62e1b75f4003ef77032006a142bbf31772936a1e5098566b28a04a5c71c73f1f2c9f539a85458c50a554de12da9d7e69fb2507f7c0788885508d385bbe7a9538fa675712aa1eaad29902bb46eee4531d00a10fd81179e4151929f60fec4dc50001ce87302e302e302e30808454f8483c");
 
         PingMessage msg1 = (PingMessage)Message.decode(wire);
 
         ECKey key = ECKey.fromPrivate(BigInteger.TEN);
-        PingMessage msg2 =  PingMessage.create(msg1.getHost(), msg1.getPort(), key);
+        Node node = Node.instanceOf(msg1.getToHost() + ":" + msg1.getToPort());
+        PingMessage msg2 =  PingMessage.create(node, node, key);
         PingMessage msg3 = (PingMessage)Message.decode(msg2.getPacket());
 
-        assertEquals(msg1.getHost(), msg3.getHost());
+        assertEquals(msg1.getToHost(), msg3.getToHost());
     }
 
 
@@ -229,6 +240,35 @@ public class RLPXTest {
 
         PongMessage msg3 = (PongMessage) Message.decode(msg2.getPacket());
         assertEquals(Hex.toHexString(msg1.getToken()), Hex.toHexString(msg3.getToken()));
+    }
+
+    /**
+     * Correct encoding of IP addresses according to official RLPx protocol documentation
+     * https://github.com/ethereum/devp2p/blob/master/rlpx.md
+     */
+    @Test
+    public void testCorrectIpPing() {
+        //  {mdc=d7a3a7ce591180e2f6d6f8655ece88fe3d98fff2b9896578712f77aabb8394eb,
+        //      signature=6a436c85ad30842cb64451f9a5705b96089b37ad7705cf28ee15e51be55a9b756fe178371d28961aa432ce625fb313fd8e6c8607a776107115bafdd591e89dab00,
+        //      type=01, data=e804d7900000000000000000000000000000000082765f82765fc9843a8808ba8233d88084587328cd}
+        byte[] wire =
+                Hex.decode("d7a3a7ce591180e2f6d6f8655ece88fe3d98fff2b9896578712f77aabb8394eb6a436c85ad30842cb64451f9a5705b96089b37ad7705cf28ee15e51be55a9b756fe178371d28961aa432ce625fb313fd8e6c8607a776107115bafdd591e89dab0001e804d7900000000000000000000000000000000082765f82765fc9843a8808ba8233d88084587328cd");
+
+        PingMessage msg1 = (PingMessage) Message.decode(wire);
+        assertEquals(30303, msg1.getFromPort());
+        assertEquals("0.0.0.0", msg1.getFromHost());
+        assertEquals(13272, msg1.getToPort());
+        assertEquals("58.136.8.186", msg1.getToHost());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testInvalidNodeId() {
+        byte[] id_1 = sha3("+++".getBytes(Charset.forName("UTF-8")));
+        String host_1 = "85.65.19.231";
+        int port_1 = 30303;
+
+        Node node_1 = new Node(id_1, host_1 , port_1);
+        new Node(node_1.getRLP());
     }
 }
 

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.util;
 
 import org.junit.Assert;
@@ -458,5 +475,70 @@ public class ByteUtilTest {
             byte[] expected = new byte[] {13, 13};
             assertArrayEquals(expected, actuals);
         }
+    }
+
+    @Test
+    public void testIpConversion() {
+        String ip1 = "0.0.0.0";
+        byte[] ip1Bytes = ByteUtil.hostToBytes(ip1);
+        assertEquals(ip1, ByteUtil.bytesToIp(ip1Bytes));
+
+        String ip2 = "35.36.37.138";
+        byte[] ip2Bytes = ByteUtil.hostToBytes(ip2);
+        assertEquals(ip2, ByteUtil.bytesToIp(ip2Bytes));
+
+        String ip3 = "255.255.255.255";
+        byte[] ip3Bytes = ByteUtil.hostToBytes(ip3);
+        assertEquals(ip3, ByteUtil.bytesToIp(ip3Bytes));
+
+        // Fallback case
+        String ip4 = "255.255.255.256";
+        byte[] ip4Bytes = ByteUtil.hostToBytes(ip4);
+        assertEquals("0.0.0.0", ByteUtil.bytesToIp(ip4Bytes));
+    }
+
+    @Test
+    public void testNumberOfLeadingZeros() {
+
+        int n0 = ByteUtil.numberOfLeadingZeros(new byte[0]);
+        assertEquals(0, n0);
+
+        int n1 = ByteUtil.numberOfLeadingZeros(Hex.decode("05"));
+        assertEquals(5, n1);
+
+        int n2 = ByteUtil.numberOfLeadingZeros(Hex.decode("01"));
+        assertEquals(7, n2);
+
+        int n3 = ByteUtil.numberOfLeadingZeros(Hex.decode("00"));
+        assertEquals(8, n3);
+
+        int n4 = ByteUtil.numberOfLeadingZeros(Hex.decode("ff"));
+        assertEquals(0, n4);
+
+
+        byte[] v1 = Hex.decode("1040");
+
+        int n5 = ByteUtil.numberOfLeadingZeros(v1);
+        assertEquals(3, n5);
+
+        // add leading zero bytes
+        byte[] v2 = new byte[4];
+        System.arraycopy(v1, 0, v2, 2, v1.length);
+
+        int n6 = ByteUtil.numberOfLeadingZeros(v2);
+        assertEquals(19, n6);
+
+        byte[] v3 = new byte[8];
+
+        int n7 = ByteUtil.numberOfLeadingZeros(v3);
+        assertEquals(64, n7);
+
+    }
+
+    @Test
+    public void nullArrayToNumber() {
+        assertEquals(BigInteger.ZERO, ByteUtil.bytesToBigInteger(null));
+        assertEquals(0L, ByteUtil.byteArrayToLong(null));
+        assertEquals(0, ByteUtil.byteArrayToInt(null));
     }
 }

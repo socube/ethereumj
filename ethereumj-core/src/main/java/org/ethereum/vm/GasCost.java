@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm;
 
 /**
@@ -65,6 +82,7 @@ public class GasCost {
     private final int EC_RECOVER = 3000;
     private final int EXT_CODE_SIZE = 20;
     private final int EXT_CODE_COPY = 20;
+    private final int EXT_CODE_HASH = 400;
     private final int NEW_ACCT_SUICIDE = 0;
 
     public int getSTEP() {
@@ -273,5 +291,9 @@ public class GasCost {
 
     public int getEXT_CODE_COPY() {
         return EXT_CODE_COPY;
+    }
+
+    public int getEXT_CODE_HASH() {
+        return EXT_CODE_HASH;
     }
 }

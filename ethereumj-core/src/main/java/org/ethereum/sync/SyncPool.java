@@ -1,14 +1,31 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.sync;
 
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.Blockchain;
 import org.ethereum.listener.EthereumListener;
+import org.ethereum.net.message.ReasonCode;
 import org.ethereum.net.rlpx.Node;
 import org.ethereum.net.rlpx.discover.NodeHandler;
 import org.ethereum.net.rlpx.discover.NodeManager;
 import org.ethereum.net.server.Channel;
 import org.ethereum.net.server.ChannelManager;
-import org.ethereum.util.Functional;
 import org.ethereum.util.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,9 +39,13 @@ import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
+import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static org.ethereum.util.BIUtil.isIn20PercentRange;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * <p>Encapsulates logic which manages peers involved in blockchain sync</p>
@@ -62,44 +83,50 @@ public class SyncPool {
 
     private ScheduledExecutorService poolLoopExecutor = Executors.newSingleThreadScheduledExecutor();
 
-    private Functional.Predicate<NodeHandler> nodesSelector;
+    private Predicate<NodeHandler> nodesSelector;
+    private ScheduledExecutorService logExecutor = Executors.newSingleThreadScheduledExecutor();
 
     @Autowired
-    public SyncPool(final SystemProperties config, final Blockchain blockchain) {
+    public SyncPool(final SystemProperties config) {
         this.config = config;
-        this.blockchain = blockchain;
     }
 
-    public void init(final ChannelManager channelManager) {
+    public void init(final ChannelManager channelManager, final Blockchain blockchain) {
         if (this.channelManager != null) return; // inited already
         this.channelManager = channelManager;
+        this.blockchain = blockchain;
         updateLowerUsefulDifficulty();
 
-        poolLoopExecutor.scheduleWithFixedDelay(
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            heartBeat();
-                            updateLowerUsefulDifficulty();
-                            fillUp();
-                            prepareActive();
-                            cleanupActive();
-                        } catch (Throwable t) {
-                            logger.error("Unhandled exception", t);
-                        }
-                    }
-                }, WORKER_TIMEOUT, WORKER_TIMEOUT, TimeUnit.SECONDS
-        );
+        poolLoopExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                heartBeat();
+                updateLowerUsefulDifficulty();
+                prepareActive();
+                fillUp();
+                cleanupActive();
+            } catch (Throwable t) {
+                logger.error("Unhandled exception", t);
+            }
+        }, WORKER_TIMEOUT, WORKER_TIMEOUT, TimeUnit.SECONDS);
+        logExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                logActivePeers();
+                logger.info("\n");
+            } catch (Throwable t) {
+                t.printStackTrace();
+                logger.error("Exception in log worker", t);
+            }
+        }, 30, 30, TimeUnit.SECONDS);
     }
 
-    public void setNodesSelector(Functional.Predicate<NodeHandler> nodesSelector) {
+    public void setNodesSelector(Predicate<NodeHandler> nodesSelector) {
         this.nodesSelector = nodesSelector;
     }
 
     public void close() {
         try {
             poolLoopExecutor.shutdownNow();
+            logExecutor.shutdownNow();
         } catch (Exception e) {
             logger.warn("Problems shutting down executor", e);
         }
@@ -126,6 +153,24 @@ public class SyncPool {
         return null;
     }
 
+    @Nullable
+    public synchronized Channel getNotLastIdle() {
+        ArrayList<Channel> channels = new ArrayList<>(activePeers);
+        Collections.shuffle(channels);
+        Channel candidate = null;
+        for (Channel peer : channels) {
+            if (peer.isIdle()) {
+                if (candidate == null) {
+                    candidate = peer;
+                } else {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
     public synchronized List<Channel> getAllIdle() {
         List<Channel> ret = new ArrayList<>();
         for (Channel peer : activePeers) {
@@ -133,6 +178,14 @@ public class SyncPool {
                 ret.add(peer);
         }
         return ret;
+    }
+
+    public synchronized List<Channel> getActivePeers() {
+        return new ArrayList<>(activePeers);
+    }
+
+    public synchronized int getActivePeersCount() {
+        return activePeers.size();
     }
 
     @Nullable
@@ -175,6 +228,40 @@ public class SyncPool {
         }
     }
 
+    class NodeSelector implements Predicate<NodeHandler> {
+        BigInteger lowerDifficulty;
+        Set<String> nodesInUse;
+
+        public NodeSelector(BigInteger lowerDifficulty) {
+            this.lowerDifficulty = lowerDifficulty;
+        }
+
+        public NodeSelector(BigInteger lowerDifficulty, Set<String> nodesInUse) {
+            this.lowerDifficulty = lowerDifficulty;
+            this.nodesInUse = nodesInUse;
+        }
+
+        @Override
+        public boolean test(NodeHandler handler) {
+            if (nodesInUse != null && nodesInUse.contains(handler.getNode().getHexId())) {
+                return false;
+            }
+
+            if (handler.getNodeStatistics().isPredefined()) return true;
+
+            if (nodesSelector != null && !nodesSelector.test(handler)) return false;
+
+            if (lowerDifficulty.compareTo(BigInteger.ZERO) > 0 &&
+                    handler.getNodeStatistics().getEthTotalDifficulty() == null) {
+                return false;
+            }
+
+            if (handler.getNodeStatistics().getReputation() < 100) return false;
+
+            return handler.getNodeStatistics().getEthTotalDifficulty().compareTo(lowerDifficulty) >= 0;
+        }
+    }
+
     private void fillUp() {
         int lackSize = config.maxActivePeers() - channelManager.getActivePeers().size();
         if(lackSize <= 0) return;
@@ -182,37 +269,10 @@ public class SyncPool {
         final Set<String> nodesInUse = nodesInUse();
         nodesInUse.add(Hex.toHexString(config.nodeId()));   // exclude home node
 
-        class NodeSelector implements Functional.Predicate<NodeHandler> {
-            BigInteger lowerDifficulty;
-
-            public NodeSelector(BigInteger lowerDifficulty) {
-                this.lowerDifficulty = lowerDifficulty;
-            }
-
-            @Override
-            public boolean test(NodeHandler handler) {
-                if (nodesInUse.contains(handler.getNode().getHexId())) {
-                    return false;
-                }
-
-                if (handler.getNodeStatistics().isPredefined()) return true;
-
-                if (nodesSelector != null && !nodesSelector.test(handler)) return false;
-
-                if (lowerDifficulty.compareTo(BigInteger.ZERO) > 0 && handler.getNodeStatistics().getEthTotalDifficulty() == null) {
-                    return false;
-                }
-
-                if (handler.getNodeStatistics().getReputation() < 100) return false;
-
-                return handler.getNodeStatistics().getEthTotalDifficulty().compareTo(lowerDifficulty) >= 0;
-            }
-        }
-
         List<NodeHandler> newNodes;
-        newNodes = nodeManager.getNodes(new NodeSelector(lowerUsefulDifficulty), lackSize);
+        newNodes = nodeManager.getNodes(new NodeSelector(lowerUsefulDifficulty, nodesInUse), lackSize);
         if (lackSize > 0 && newNodes.isEmpty()) {
-            newNodes = nodeManager.getNodes(new NodeSelector(BigInteger.ZERO), lackSize);
+            newNodes = nodeManager.getNodes(new NodeSelector(BigInteger.ZERO, nodesInUse), lackSize);
         }
 
         if (logger.isTraceEnabled()) {
@@ -225,17 +285,25 @@ public class SyncPool {
     }
 
     private synchronized void prepareActive() {
-        List<Channel> active = new ArrayList<>(channelManager.getActivePeers());
+        List<Channel> managerActive = new ArrayList<>(channelManager.getActivePeers());
+        if (logger.isTraceEnabled())
+            logger.trace("Preparing active peers from {} channelManager peers", managerActive.size());
 
+        // Filtering out with nodeSelector because server-connected nodes were not tested
+        NodeSelector nodeSelector = new NodeSelector(BigInteger.ZERO);
+        List<Channel> active = new ArrayList<>();
+        for (Channel channel : managerActive) {
+            if (nodeSelector.test(nodeManager.getNodeHandler(channel.getNode()))) {
+                active.add(channel);
+            }
+        }
+
+        if (logger.isTraceEnabled())
+            logger.trace("After filtering out with node selector, {} peers remaining", active.size());
         if (active.isEmpty()) return;
 
         // filtering by 20% from top difficulty
-        Collections.sort(active, new Comparator<Channel>() {
-            @Override
-            public int compare(Channel c1, Channel c2) {
-                return c2.getTotalDifficulty().compareTo(c1.getTotalDifficulty());
-            }
-        });
+        active.sort((c1, c2) -> c2.getTotalDifficulty().compareTo(c1.getTotalDifficulty()));
 
         BigInteger highestDifficulty = active.get(0).getTotalDifficulty();
         int thresholdIdx = min(config.syncPeerCount(), active.size()) - 1;
@@ -249,19 +317,33 @@ public class SyncPool {
 
         List<Channel> filtered = active.subList(0, thresholdIdx + 1);
 
-        // sorting by latency in asc order
-        Collections.sort(filtered, new Comparator<Channel>() {
-            @Override
-            public int compare(Channel c1, Channel c2) {
-                return Double.valueOf(c1.getPeerStats().getAvgLatency()).compareTo(c2.getPeerStats().getAvgLatency());
+        // Dropping other peers to free up slots for active
+        // Act more aggressive until sync is done
+        int cap = channelManager.getSyncManager().isSyncDone() ?
+                // 10 peers are enough for variance in data on short sync
+                Math.max(config.maxActivePeers() / 2, config.maxActivePeers() - 10) : config.maxActivePeers() / 6;
+        int otherCount = managerActive.size() - filtered.size();
+        int killCount = max(0, otherCount - cap);
+        if (killCount > 0) {
+            AtomicInteger dropped = new AtomicInteger(0);
+            for (Channel channel : managerActive) {
+                if (!filtered.contains(channel)) {
+                    if (channel.isIdle()) {
+                        channelManager.disconnect(channel, ReasonCode.TOO_MANY_PEERS);
+                        if (dropped.incrementAndGet() >= killCount) break;
+                    }
+                }
             }
-        });
+            logger.debug("Dropped {} other peers to free up sync slots", dropped.get());
+        }
 
         for (Channel channel : filtered) {
             if (!activePeers.contains(channel)) {
                 ethereumListener.onPeerAddedToSyncPool(channel);
             }
         }
+        if (logger.isTraceEnabled())
+            logger.trace("{} peers set to be active in SyncPool", filtered.size());
 
         activePeers.clear();
         activePeers.addAll(filtered);
@@ -282,7 +364,7 @@ public class SyncPool {
     private void logDiscoveredNodes(List<NodeHandler> nodes) {
         StringBuilder sb = new StringBuilder();
         for(NodeHandler n : nodes) {
-            sb.append(Utils.getNodeIdShort(Hex.toHexString(n.getNode().getId())));
+            sb.append(Utils.getNodeIdShort(toHexString(n.getNode().getId())));
             sb.append(", ");
         }
         if(sb.length() > 0) {
@@ -299,6 +381,10 @@ public class SyncPool {
         if (td.compareTo(lowerUsefulDifficulty) > 0) {
             lowerUsefulDifficulty = td;
         }
+    }
+
+    public ChannelManager getChannelManager() {
+        return channelManager;
     }
 
     private void heartBeat() {

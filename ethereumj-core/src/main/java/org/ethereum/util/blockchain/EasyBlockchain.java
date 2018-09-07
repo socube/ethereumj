@@ -1,7 +1,25 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.util.blockchain;
 
 import org.ethereum.core.Blockchain;
 import org.ethereum.crypto.ECKey;
+import org.ethereum.solidity.compiler.CompilationResult.ContractMetadata;
 
 import java.math.BigInteger;
 
@@ -36,6 +54,24 @@ public interface EasyBlockchain {
      * The contract name is specified when the soliditySrc has more than one contract
      */
     SolidityContract submitNewContract(String soliditySrc, String contractName, Object... constructorArgs);
+
+    /**
+     * Creates and sends the transaction with the Solidity contract creation code from a compiled json.
+     * If the soliditySrc has more than one contract the {@link #submitNewContract(String, String, Object[])}
+     * method should be used. This method will generate exception in this case
+     */
+    SolidityContract submitNewContractFromJson(String json, Object... constructorArgs);
+
+    /**
+     * Creates and sends the transaction with the Solidity contract creation code from a compiled json.
+     * The contract name is specified when the soliditySrc has more than one contract
+     */
+    SolidityContract submitNewContractFromJson(String json, String contractName, Object... constructorArgs);
+
+    /**
+     * Creates and sends the transaction with the Solidity contract creation code from the contractMetaData.
+     */
+	SolidityContract submitNewContract(ContractMetadata contractMetaData, Object... constructorArgs);
 
     /**
      * Creates an interface to the Solidity contract already existing on the blockchain.

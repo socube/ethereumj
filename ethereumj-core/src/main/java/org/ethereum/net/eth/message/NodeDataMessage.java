@@ -1,9 +1,25 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.message;
 
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
 import org.ethereum.util.Value;
-import org.spongycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +35,7 @@ public class NodeDataMessage extends EthMessage {
 
     public NodeDataMessage(byte[] encoded) {
         super(encoded);
+        parse();
     }
 
     public NodeDataMessage(List<Value> dataList) {
@@ -27,12 +44,12 @@ public class NodeDataMessage extends EthMessage {
     }
 
     private void parse() {
-        RLPList paramsList = (RLPList) RLP.decode2(encoded).get(0);
+        RLPList paramsList = RLP.unwrapList(encoded);
 
         dataList = new ArrayList<>();
         for (int i = 0; i < paramsList.size(); ++i) {
             // Need it AS IS
-            dataList.add(Value.fromRlpEncoded(paramsList.get(i).getRLPData()));
+            dataList.add(new Value(paramsList.get(i).getRLPData()));
         }
         parsed = true;
     }
@@ -41,7 +58,7 @@ public class NodeDataMessage extends EthMessage {
         List<byte[]> dataListRLP = new ArrayList<>();
         for (Value value: dataList) {
             if (value == null) continue; // Bad sign
-            dataListRLP.add(RLP.encodeElement(value.getData()));
+            dataListRLP.add(RLP.encodeElement(value.asBytes()));
         }
         byte[][] encodedElementArray = dataListRLP.toArray(new byte[dataListRLP.size()][]);
         this.encoded = RLP.encodeList(encodedElementArray);
@@ -55,7 +72,6 @@ public class NodeDataMessage extends EthMessage {
     }
 
     public List<Value> getDataList() {
-        if (!parsed) parse();
         return dataList;
     }
 
@@ -70,7 +86,6 @@ public class NodeDataMessage extends EthMessage {
     }
 
     public String toString() {
-        if (!parsed) parse();
 
         StringBuilder payload = new StringBuilder();
 

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.db;
 
 import org.apache.commons.collections4.map.LRUMap;
@@ -48,8 +65,8 @@ public class TransactionStore extends ObjectDataSource<List<TransactionInfo>> {
         @Override
         public List<TransactionInfo> deserialize(byte[] stream) {
             try {
-                RLPList params = RLP.decode2(stream);
-                RLPList infoList = (RLPList) params.get(0);
+                if (stream == null) return null;
+                RLPList infoList = RLP.unwrapList(stream);
                 List<TransactionInfo> ret = new ArrayList<>();
                 for (int i = 0; i < infoList.size(); i++) {
                     ret.add(new TransactionInfo(infoList.get(i).getRLPData()));
@@ -105,27 +122,17 @@ public class TransactionStore extends ObjectDataSource<List<TransactionInfo>> {
         return null;
     }
 
-    public TransactionStore(KeyValueDataSource src) {
-        super(src, serializer);
-        withCacheSize(256);
-        withCacheOnWrite(true);
+    public TransactionStore(Source<byte[], byte[]> src) {
+        super(src, serializer, 256);
     }
 
-    @Override
-    public void flush() {
-        if (getSrc() instanceof Flushable) {
-            ((Flushable) getSrc()).flush();
-        }
-    }
-
-    @Override
     @PreDestroy
     public void close() {
-        try {
-            logger.info("Closing TransactionStore...");
-            super.close();
-        } catch (Exception e) {
-            logger.warn("Problems closing TransactionStore", e);
-        }
+//        try {
+//            logger.info("Closing TransactionStore...");
+//            super.close();
+//        } catch (Exception e) {
+//            logger.warn("Problems closing TransactionStore", e);
+//        }
     }
 }

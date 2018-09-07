@@ -1,23 +1,38 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import org.ethereum.config.CommonConfig;
 import org.ethereum.config.SystemProperties;
-import org.ethereum.config.blockchain.FrontierConfig;
-import org.ethereum.config.net.MainNetConfig;
-import org.ethereum.crypto.HashUtil;
-import org.ethereum.datasource.MapDB;
-import org.ethereum.db.RepositoryRoot;
-import org.ethereum.db.ByteArrayWrapper;
-import org.ethereum.db.IndexedBlockStore;
-import org.ethereum.util.blockchain.SolidityContract;
-import org.ethereum.util.blockchain.StandaloneBlockchain;
 import org.ethereum.core.genesis.GenesisLoader;
 import org.ethereum.crypto.ECKey;
-import org.ethereum.datasource.HashMapDB;
+import org.ethereum.crypto.HashUtil;
+import org.ethereum.datasource.inmem.HashMapDB;
+import org.ethereum.datasource.NoDeleteSource;
+import org.ethereum.db.IndexedBlockStore;
+import org.ethereum.db.RepositoryRoot;
 import org.ethereum.listener.EthereumListenerAdapter;
 import org.ethereum.mine.Ethash;
 import org.ethereum.util.ByteUtil;
+import org.ethereum.util.blockchain.SolidityContract;
+import org.ethereum.util.blockchain.StandaloneBlockchain;
 import org.ethereum.validator.DependentBlockHeaderRuleAdapter;
+import org.ethereum.vm.LogInfo;
 import org.ethereum.vm.program.invoke.ProgramInvokeFactoryImpl;
 import org.junit.*;
 import org.slf4j.Logger;
@@ -27,10 +42,7 @@ import org.spongycastle.util.encoders.Hex;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Locale;
-import java.util.Scanner;
+import java.util.*;
 
 /**
  * Created by Anton Nashatyrev on 29.12.2015.
@@ -39,17 +51,12 @@ public class ImportLightTest {
 
     @BeforeClass
     public static void setup() {
-        SystemProperties.getDefault().setBlockchainConfig(new FrontierConfig(new FrontierConfig.FrontierConstants() {
-            @Override
-            public BigInteger getMINIMUM_DIFFICULTY() {
-                return BigInteger.ONE;
-            }
-        }));
+        SystemProperties.getDefault().setBlockchainConfig(StandaloneBlockchain.getEasyMiningConfig());
     }
 
     @AfterClass
     public static void cleanup() {
-        SystemProperties.getDefault().setBlockchainConfig(MainNetConfig.INSTANCE);
+        SystemProperties.resetToDefault();
     }
 
 
@@ -72,15 +79,16 @@ public class ImportLightTest {
         logger.info("#######################################");
         BlockchainImpl blockchain = createBlockchain(GenesisLoader.loadGenesis(
                 getClass().getResourceAsStream("/genesis/frontier.json")));
-        Scanner scanner = new Scanner(new FileInputStream("D:\\ws\\ethereumj\\work\\blocks-rec.dmp"));
-        while (scanner.hasNext()) {
-            String blockHex = scanner.next();
-            Block block = new Block(Hex.decode(blockHex));
-            ImportResult result = blockchain.tryToConnect(block);
-            if (result != ImportResult.EXIST && result != ImportResult.IMPORTED_BEST) {
-                throw new RuntimeException(result + ": " + block + "");
+        try (Scanner scanner = new Scanner(new FileInputStream("D:\\ws\\ethereumj\\work\\blocks-rec.dmp"))) {
+            while (scanner.hasNext()) {
+                String blockHex = scanner.next();
+                Block block = new Block(Hex.decode(blockHex));
+                ImportResult result = blockchain.tryToConnect(block);
+                if (result != ImportResult.EXIST && result != ImportResult.IMPORTED_BEST) {
+                    throw new RuntimeException(result + ": " + block + "");
+                }
+                System.out.println("Imported " + block.getShortDescr());
             }
-            System.out.println("Imported " + block.getShortDescr());
         }
     }
 
@@ -505,7 +513,7 @@ public class ImportLightTest {
 
             // checking balance of not existed address should take
             // less that gas limit
-            Assert.assertEquals(21512, spent);
+            Assert.assertEquals(21532, spent);
         }
 
         {
@@ -540,6 +548,7 @@ public class ImportLightTest {
 
 
     @Test
+    @Ignore
     public void deepRecursionTest() throws Exception {
         String contractA =
                 "contract A {" +
@@ -672,22 +681,19 @@ public class ImportLightTest {
         int cnt = 1;
 
         final CallTransaction.Function function = a.contract.getByName("set");
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                int cnt = 1;
-                while (cnt++ > 0) {
-                    try {
-                        bc.generatePendingTransactions();
+        new Thread(() -> {
+            int cnt1 = 1;
+            while (cnt1++ > 0) {
+                try {
+                    bc.generatePendingTransactions();
 //                    byte[] encode = function.encode(cnt % 32, cnt);
 //                    Transaction callTx1 = bc.createTransaction(new ECKey(), 0, a.getAddress(), BigInteger.ZERO, encode);
 //                    bc.getPendingState().addPendingTransaction(callTx1);
 //                    Transaction callTx2 = bc.createTransaction(, 0, a.getAddress(), BigInteger.ZERO, encode);
 //                    bc.getPendingState().addPendingTransaction(callTx);
-                        Thread.sleep(10);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    Thread.sleep(10);
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
             }
         }).start();
@@ -742,11 +748,151 @@ public class ImportLightTest {
 
 
 
+    @Test
+    public void suicideInFailedCall() throws Exception {
+        // check that if a contract is suicide in call which is failed (thus suicide is reverted)
+        // the refund for this suicide is not added
+        String contractA =
+                        "contract B {" +
+                        "  function f(){" +
+                        "    suicide(msg.sender);" +
+                        "  }" +
+                        "}" +
+                        "contract A {" +
+                        "  function f(){" +
+                        "    this.call(bytes4(sha3('bad()')));" +
+                        "  }" +
+                        "  function bad() {" +
+                        "    B b = new B();" +
+                        "    b.call(bytes4(sha3('f()')));" +
+                        "    throw;" +
+                        "  }" +
+                        "}";
+
+        StandaloneBlockchain bc = new StandaloneBlockchain().withGasLimit(5_000_000);
+        SolidityContract a = bc.submitNewContract(contractA, "A");
+        bc.createBlock();
+        final BigInteger[] refund = new BigInteger[1];
+        bc.addEthereumListener(new EthereumListenerAdapter() {
+            @Override
+            public void onTransactionExecuted(TransactionExecutionSummary summary) {
+                refund[0] = summary.getGasRefund();
+            }
+        });
+        a.callFunction("f");
+        bc.createBlock();
+
+        Assert.assertEquals(BigInteger.ZERO, refund[0]);
+
+        // no StackOverflowException
+    }
+
+    @Test
+    public void logInFailedCall() throws Exception {
+        // check that if a contract is suicide in call which is failed (thus suicide is reverted)
+        // the refund for this suicide is not added
+        String contractA =
+                        "contract A {" +
+                        "  function f(){" +
+                        "    this.call(bytes4(sha3('bad()')));" +
+                        "  }" +
+                        "  function bad() {" +
+                        "    log0(1234);" +
+                        "    throw;" +
+                        "  }" +
+                        "}";
+
+        StandaloneBlockchain bc = new StandaloneBlockchain().withGasLimit(5_000_000);
+        SolidityContract a = bc.submitNewContract(contractA, "A");
+        bc.createBlock();
+        final List<LogInfo> logs = new ArrayList<>();
+        bc.addEthereumListener(new EthereumListenerAdapter() {
+            @Override
+            public void onTransactionExecuted(TransactionExecutionSummary summary) {
+                logs.addAll(summary.getLogs());
+            }
+        });
+        a.callFunction("f");
+        bc.createBlock();
+
+        Assert.assertEquals(0, logs.size());
+
+        // no StackOverflowException
+    }
+
+    @Test
+    public void ecRecoverTest() throws Exception {
+        // checks that ecrecover precompile contract rejects v > 255
+        String contractA =
+                "contract A {" +
+                        "  function f (bytes32 hash, bytes32 v, bytes32 r, bytes32 s) returns (address) {" +
+                        "    assembly {" +
+                        "      mstore(0x100, hash)" +
+                        "      mstore(0x120, v)" +
+                        "      mstore(0x140, r)" +
+                        "      mstore(0x160, s)" +
+                        "      let ret := callcode(0x50000, 0x01, 0x0, 0x100, 0x80, 0x200, 0x220)" + // call ecrecover
+                        "      return(0x200, 0x20)" +
+                        "    }" +
+                        "  }" +
+                        "}";
+
+        StandaloneBlockchain bc = new StandaloneBlockchain().withGasLimit(5_000_000);
+        SolidityContract a = bc.submitNewContract(contractA, "A");
+        bc.createBlock();
+
+        ECKey key = ECKey.DUMMY;
+        byte[] hash = new byte[32];
+        ECKey.ECDSASignature signature = key.sign(hash);
+
+        Object[] ret = a.callConstFunction("f", hash,
+                ByteUtil.merge(new byte[31], new byte[]{signature.v}),
+                ByteUtil.bigIntegerToBytes(signature.r, 32),
+                ByteUtil.bigIntegerToBytes(signature.s, 32));
+
+        Assert.assertArrayEquals(key.getAddress(), (byte[]) ret[0]);
+
+        ret = a.callConstFunction("f", hash,
+                ByteUtil.merge(new byte[] {1}, new byte[30], new byte[]{signature.v}),
+                ByteUtil.bigIntegerToBytes(signature.r, 32),
+                ByteUtil.bigIntegerToBytes(signature.s, 32));
+
+        Assert.assertArrayEquals(new byte[20], (byte[]) ret[0]);
+    }
+
+    @Test
+    public void functionTypeTest() throws IOException, InterruptedException {
+        String contractA =
+                "contract A {" +
+                        "  int public res;" +
+                        "  function calc(int b, function (int a) external returns (int) f) external returns (int) {" +
+                        "    return f(b);" +
+                        "  }" +
+                        "  function fInc(int a) external returns (int) { return a + 1;}" +
+                        "  function fDec(int a) external returns (int) { return a - 1;}" +
+                        "  function test() {" +
+                        "    res = this.calc(111, this.fInc);" +
+                        "  }" +
+                        "}";
+
+        StandaloneBlockchain bc = new StandaloneBlockchain();
+        SolidityContract a = bc.submitNewContract(contractA);
+        bc.createBlock();
+        a.callFunction("test");
+        bc.createBlock();
+        Assert.assertEquals(a.callConstFunction("res")[0], BigInteger.valueOf(112));
+
+        BigInteger r1 = (BigInteger) a.callConstFunction("calc", 222, a.getFunction("fInc"))[0];
+        Assert.assertEquals(223, r1.intValue());
+        BigInteger r2 = (BigInteger) a.callConstFunction("calc", 222, a.getFunction("fDec"))[0];
+        Assert.assertEquals(221, r2.intValue());
+    }
+
     public static BlockchainImpl createBlockchain(Genesis genesis) {
         IndexedBlockStore blockStore = new IndexedBlockStore();
-        blockStore.init(new HashMapDB(), new HashMapDB());
+        blockStore.init(new HashMapDB<byte[]>(), new HashMapDB<byte[]>());
 
-        RepositoryRoot repository = new RepositoryRoot(new MapDB());
+        RepositoryRoot repository = new RepositoryRoot(new NoDeleteSource<>(new HashMapDB<byte[]>()));
 
         ProgramInvokeFactoryImpl programInvokeFactory = new ProgramInvokeFactoryImpl();
         EthereumListenerAdapter listener = new EthereumListenerAdapter();
@@ -758,24 +904,21 @@ public class ImportLightTest {
 
         blockchain.byTest = true;
 
-        PendingStateImpl pendingState = new PendingStateImpl(listener, blockchain);
+        PendingStateImpl pendingState = new PendingStateImpl(listener);
 
         pendingState.setBlockchain(blockchain);
         blockchain.setPendingState(pendingState);
 
         Repository track = repository.startTracking();
-        for (ByteArrayWrapper key : genesis.getPremine().keySet()) {
-            track.createAccount(key.getData());
-            track.addBalance(key.getData(), genesis.getPremine().get(key).getBalance());
-        }
+        Genesis.populateRepository(track, genesis);
 
         track.commit();
         repository.commit();
 
-        blockStore.saveBlock(genesis, genesis.getCumulativeDifficulty(), true);
+        blockStore.saveBlock(genesis, genesis.getDifficultyBI(), true);
 
         blockchain.setBestBlock(genesis);
-        blockchain.setTotalDifficulty(genesis.getCumulativeDifficulty());
+        blockchain.setTotalDifficulty(genesis.getDifficultyBI());
 
         return blockchain;
     }

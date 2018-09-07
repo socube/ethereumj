@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.config;
 
 import org.ethereum.net.rlpx.Node;
@@ -48,14 +65,19 @@ public class NodeFilter {
         }
 
         public boolean accept(InetAddress nodeAddr) {
+            if (hostIpPattern == null) return true;
             String ip = nodeAddr.getHostAddress();
             return hostIpPattern != null && ip.startsWith(hostIpPattern);
         }
 
         public boolean accept(Node node) {
             try {
-                return (nodeId == null || Arrays.equals(node.getId(), nodeId))
-                        && (hostIpPattern == null || accept(InetAddress.getByName(node.getHost())));
+                boolean shouldAcceptNodeId = nodeId == null || Arrays.equals(node.getId(), nodeId);
+                if (!shouldAcceptNodeId) {
+                    return false;
+                }
+                InetAddress nodeAddress = InetAddress.getByName(node.getHost());
+                return (hostIpPattern == null || accept(nodeAddress));
             } catch (UnknownHostException e) {
                 return false;
             }

@@ -1,14 +1,31 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import org.ethereum.crypto.ECKey;
 import org.spongycastle.math.ec.ECPoint;
 import org.spongycastle.util.BigIntegers;
-import org.spongycastle.util.encoders.Hex;
 
 import java.util.Arrays;
 
 import static org.ethereum.util.ByteUtil.merge;
 import static org.spongycastle.util.BigIntegers.asUnsignedByteArray;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Authentication initiation message, to be wrapped inside
@@ -95,10 +112,10 @@ public class AuthInitiateMessage {
                 asUnsignedByteArray(signature.s), new byte[]{EncryptionHandshake.recIdFromSignatureV(signature.v)});
 
         return "AuthInitiateMessage{" +
-                "\n  sigBytes=" + Hex.toHexString(sigBytes) +
-                "\n  ephemeralPublicHash=" + Hex.toHexString(ephemeralPublicHash) +
-                "\n  publicKey=" + Hex.toHexString(publicKey.getEncoded(false)) +
-                "\n  nonce=" + Hex.toHexString(nonce) +
+                "\n  sigBytes=" + toHexString(sigBytes) +
+                "\n  ephemeralPublicHash=" + toHexString(ephemeralPublicHash) +
+                "\n  publicKey=" + toHexString(publicKey.getEncoded(false)) +
+                "\n  nonce=" + toHexString(nonce) +
                 "\n}";
     }
 }

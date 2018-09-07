@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.util;
 
 import org.ethereum.core.Repository;
@@ -112,5 +129,14 @@ public class BIUtil {
 
     public static BigInteger max(BigInteger first, BigInteger second) {
         return first.compareTo(second) < 0 ? second : first;
+    }
+
+    /**
+     * Returns a result of safe addition of two {@code int} values
+     * {@code Integer.MAX_VALUE} is returned if overflow occurs
+     */
+    public static int addSafely(int a, int b) {
+        long res = (long) a + (long) b;
+        return res > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) res;
     }
 }

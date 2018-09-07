@@ -1,9 +1,30 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
-import org.ethereum.util.*;
+import org.ethereum.datasource.MemSizeEstimator;
+import org.ethereum.util.ByteUtil;
+import org.ethereum.util.RLP;
+import org.ethereum.util.RLPElement;
+import org.ethereum.util.RLPItem;
+import org.ethereum.util.RLPList;
 import org.ethereum.vm.LogInfo;
 import org.spongycastle.util.BigIntegers;
-import org.spongycastle.util.encoders.Hex;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -11,7 +32,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.apache.commons.lang3.ArrayUtils.nullToEmpty;
+import static org.ethereum.datasource.MemSizeEstimator.ByteArrayEstimator;
 import static org.ethereum.util.ByteUtil.EMPTY_BYTE_ARRAY;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * The transaction receipt is a tuple of three items
@@ -187,6 +210,19 @@ public class TransactionReceipt {
         rlpEncoded = null;
     }
 
+    public void setTxStatus(boolean success) {
+        this.postTxState = success ? new byte[]{1} : new byte[0];
+        rlpEncoded = null;
+    }
+
+    public boolean hasTxStatus() {
+        return postTxState != null && postTxState.length <= 1;
+    }
+
+    public boolean isTxStatusOK() {
+        return postTxState != null && postTxState.length == 1 && postTxState[0] == 1;
+    }
+
     public void setCumulativeGas(long cumulativeGas) {
         this.cumulativeGas = BigIntegers.asUnsignedByteArray(BigInteger.valueOf(cumulativeGas));
         rlpEncoded = null;
@@ -241,14 +277,34 @@ public class TransactionReceipt {
         // todo: fix that
 
         return "TransactionReceipt[" +
-                "\n  , postTxState=" + Hex.toHexString(postTxState) +
-                "\n  , cumulativeGas=" + Hex.toHexString(cumulativeGas) +
-                "\n  , gasUsed=" + Hex.toHexString(gasUsed) +
+                "\n  , " + (hasTxStatus() ? ("txStatus=" + (isTxStatusOK() ? "OK" : "FAILED"))
+                                        : ("postTxState=" + toHexString(postTxState))) +
+                "\n  , cumulativeGas=" + toHexString(cumulativeGas) +
+                "\n  , gasUsed=" + toHexString(gasUsed) +
                 "\n  , error=" + error +
-                "\n  , executionResult=" + Hex.toHexString(executionResult) +
+                "\n  , executionResult=" + toHexString(executionResult) +
                 "\n  , bloom=" + bloomFilter.toString() +
                 "\n  , logs=" + logInfoList +
                 ']';
     }
 
+    public long estimateMemSize() {
+        return MemEstimator.estimateSize(this);
+    }
+
+    public static final MemSizeEstimator<TransactionReceipt> MemEstimator = receipt -> {
+        if (receipt == null) {
+            return 0;
+        }
+        long logSize = receipt.logInfoList.stream().mapToLong(LogInfo.MemEstimator::estimateSize).sum() + 16;
+        return (receipt.transaction == null ? 0 : Transaction.MemEstimator.estimateSize(receipt.transaction)) +
+                (receipt.postTxState == EMPTY_BYTE_ARRAY ? 0 : ByteArrayEstimator.estimateSize(receipt.postTxState)) +
+                (receipt.cumulativeGas == EMPTY_BYTE_ARRAY ? 0 : ByteArrayEstimator.estimateSize(receipt.cumulativeGas)) +
+                (receipt.gasUsed == EMPTY_BYTE_ARRAY ? 0 : ByteArrayEstimator.estimateSize(receipt.gasUsed)) +
+                (receipt.executionResult == EMPTY_BYTE_ARRAY ? 0 : ByteArrayEstimator.estimateSize(receipt.executionResult)) +
+                ByteArrayEstimator.estimateSize(receipt.rlpEncoded) +
+                Bloom.MEM_SIZE +
+                receipt.error.getBytes().length + 40 +
+                logSize;
+    };
 }

@@ -1,9 +1,33 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.db;
 
 import org.ethereum.core.Block;
 import org.ethereum.core.BlockHeader;
-import org.ethereum.datasource.*;
-import org.ethereum.datasource.Flushable;
+import org.ethereum.datasource.DataSourceArray;
+import org.ethereum.datasource.ObjectDataSource;
+import org.ethereum.datasource.Serializer;
+import org.ethereum.datasource.Source;
+import org.ethereum.util.ByteUtil;
+import org.ethereum.util.FastByteComparisons;
+import org.ethereum.util.RLP;
+import org.ethereum.util.RLPElement;
+import org.ethereum.util.RLPList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,7 +35,6 @@ import java.io.*;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import static java.math.BigInteger.ZERO;
 import static org.ethereum.crypto.HashUtil.shortHash;
@@ -21,22 +44,18 @@ public class IndexedBlockStore extends AbstractBlockstore{
 
     private static final Logger logger = LoggerFactory.getLogger("general");
 
-    KeyValueDataSource indexDS;
+    Source<byte[], byte[]> indexDS;
     DataSourceArray<List<BlockInfo>> index;
-    KeyValueDataSource blocksDS;
+    Source<byte[], byte[]> blocksDS;
     ObjectDataSource<Block> blocks;
 
     public IndexedBlockStore(){
     }
 
-//    public void init(Map<Long, List<BlockInfo>> longListHashMap, KeyValueDataSource hashMapDB, Object o, Object o1) {
-//        throw new RuntimeException("To remove");
-//    }
-
-    public void init(KeyValueDataSource index, KeyValueDataSource blocks) {
+    public void init(Source<byte[], byte[]> index, Source<byte[], byte[]> blocks) {
         indexDS = index;
         this.index = new DataSourceArray<>(
-                new ObjectDataSource<>(index, BLOCK_INFO_SERIALIZER).withCacheSize(256));
+                new ObjectDataSource<>(index, BLOCK_INFO_SERIALIZER, 512));
         this.blocksDS = blocks;
         this.blocks = new ObjectDataSource<>(blocks, new Serializer<Block, byte[]>() {
             @Override
@@ -46,9 +65,9 @@ public class IndexedBlockStore extends AbstractBlockstore{
 
             @Override
             public Block deserialize(byte[] bytes) {
-                return new Block(bytes);
+                return bytes == null ? null : new Block(bytes);
             }
-        }).withCacheSize(256);
+        }, 256);
     }
 
     public synchronized Block getBestBlock(){
@@ -81,34 +100,41 @@ public class IndexedBlockStore extends AbstractBlockstore{
     public synchronized void flush(){
         blocks.flush();
         index.flush();
-        if (blocksDS instanceof Flushable) {
-            ((Flushable)blocksDS).flush();
-        }
-        if (indexDS instanceof Flushable) {
-            ((Flushable)indexDS).flush();
-        }
+        blocksDS.flush();
+        indexDS.flush();
     }
 
 
     @Override
-    public synchronized void saveBlock(Block block, BigInteger cummDifficulty, boolean mainChain){
-        addInternalBlock(block, cummDifficulty, mainChain);
+    public synchronized void saveBlock(Block block, BigInteger totalDifficulty, boolean mainChain){
+        addInternalBlock(block, totalDifficulty, mainChain);
     }
 
-    private void addInternalBlock(Block block, BigInteger cummDifficulty, boolean mainChain){
+    private void addInternalBlock(Block block, BigInteger totalDifficulty, boolean mainChain){
 
         List<BlockInfo> blockInfos = block.getNumber() >= index.size() ?  null : index.get((int) block.getNumber());
         blockInfos = blockInfos == null ? new ArrayList<BlockInfo>() : blockInfos;
 
         BlockInfo blockInfo = new BlockInfo();
-        blockInfo.setCummDifficulty(cummDifficulty);
+        blockInfo.setTotalDifficulty(totalDifficulty);
         blockInfo.setHash(block.getHash());
         blockInfo.setMainChain(mainChain); // FIXME:maybe here I should force reset main chain for all uncles on that level
 
-        blockInfos.add(blockInfo);
+        putBlockInfo(blockInfos, blockInfo);
         index.set((int) block.getNumber(), blockInfos);
 
         blocks.put(block.getHash(), block);
+    }
+
+    private void putBlockInfo(List<BlockInfo> blockInfos, BlockInfo blockInfo) {
+        for (int i = 0; i < blockInfos.size(); i++) {
+            BlockInfo curBlockInfo = blockInfos.get(i);
+            if (FastByteComparisons.equal(curBlockInfo.getHash(), blockInfo.getHash())) {
+                blockInfos.set(i, blockInfo);
+                return;
+            }
+        }
+        blockInfos.add(blockInfo);
     }
 
 
@@ -180,7 +206,7 @@ public class IndexedBlockStore extends AbstractBlockstore{
         List<BlockInfo> blockInfos =  index.get(level.intValue());
         for (BlockInfo blockInfo : blockInfos)
                  if (areEqual(blockInfo.getHash(), hash)) {
-                     return blockInfo.cummDifficulty;
+                     return blockInfo.totalDifficulty;
                  }
 
         return ZERO;
@@ -194,7 +220,7 @@ public class IndexedBlockStore extends AbstractBlockstore{
         List<BlockInfo> blockInfos = index.get((int) maxNumber);
         for (BlockInfo blockInfo : blockInfos){
             if (blockInfo.isMainChain()){
-                return blockInfo.getCummDifficulty();
+                return blockInfo.getTotalDifficulty();
             }
         }
 
@@ -204,26 +230,21 @@ public class IndexedBlockStore extends AbstractBlockstore{
 
             for (BlockInfo blockInfo : infos) {
                 if (blockInfo.isMainChain()) {
-                    return blockInfo.getCummDifficulty();
+                    return blockInfo.getTotalDifficulty();
                 }
             }
         }
     }
 
-    public synchronized void updateAllTotDifficulties() {
-        for (int i = 1; i <= getMaxNumber() ; i++) {
-            List<BlockInfo> level = getBlockInfoForLevel(i);
-            for (BlockInfo blockInfo : level) {
-                Block block = getBlockByHash(blockInfo.getHash());
-                List<BlockInfo> parentInfos = getBlockInfoForLevel(i - 1);
-                BlockInfo parentInfo = getBlockInfoForHash(parentInfos, block.getParentHash());
-                blockInfo.setCummDifficulty(parentInfo.getCummDifficulty().add(block.getDifficultyBI()));
-            }
-            if (i % 1000 == 0) {
-                flush();
-            }
+    public synchronized void updateTotDifficulties(long index) {
+        List<BlockInfo> level = getBlockInfoForLevel(index);
+        for (BlockInfo blockInfo : level) {
+            Block block = getBlockByHash(blockInfo.getHash());
+            List<BlockInfo> parentInfos = getBlockInfoForLevel(index - 1);
+            BlockInfo parentInfo = getBlockInfoForHash(parentInfos, block.getParentHash());
+            blockInfo.setTotalDifficulty(parentInfo.getTotalDifficulty().add(block.getDifficultyBI()));
         }
-        flush();
+        this.index.set((int) index, level);
     }
 
     @Override
@@ -378,7 +399,7 @@ public class IndexedBlockStore extends AbstractBlockstore{
 
     public static class BlockInfo implements Serializable {
         byte[] hash;
-        BigInteger cummDifficulty;
+        BigInteger totalDifficulty;
         boolean mainChain;
 
         public byte[] getHash() {
@@ -389,12 +410,12 @@ public class IndexedBlockStore extends AbstractBlockstore{
             this.hash = hash;
         }
 
-        public BigInteger getCummDifficulty() {
-            return cummDifficulty;
+        public BigInteger getTotalDifficulty() {
+            return totalDifficulty;
         }
 
-        public void setCummDifficulty(BigInteger cummDifficulty) {
-            this.cummDifficulty = cummDifficulty;
+        public void setTotalDifficulty(BigInteger totalDifficulty) {
+            this.totalDifficulty = totalDifficulty;
         }
 
         public boolean isMainChain() {
@@ -411,27 +432,40 @@ public class IndexedBlockStore extends AbstractBlockstore{
 
         @Override
         public byte[] serialize(List<BlockInfo> value) {
-            try {
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                ObjectOutputStream oos = new ObjectOutputStream(bos);
-                oos.writeObject(value);
+                List<byte[]> rlpBlockInfoList = new ArrayList<>();
+                for (BlockInfo blockInfo : value) {
+                    byte[] hash = RLP.encodeElement(blockInfo.getHash());
+                    // Encoding works correctly only with positive BigIntegers
+                    if (blockInfo.getTotalDifficulty() == null || blockInfo.getTotalDifficulty().compareTo(BigInteger.ZERO) < 0) {
+                        throw new RuntimeException("BlockInfo totalDifficulty should be positive BigInteger");
+                    }
+                    byte[] totalDiff = RLP.encodeBigInteger(blockInfo.getTotalDifficulty());
+                    byte[] isMainChain = RLP.encodeInt(blockInfo.isMainChain() ? 1 : 0);
+                    rlpBlockInfoList.add(RLP.encodeList(hash, totalDiff, isMainChain));
+                }
+                byte[][] elements = rlpBlockInfoList.toArray(new byte[rlpBlockInfoList.size()][]);
 
-                byte[] data = bos.toByteArray();
-                return data;
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+                return RLP.encodeList(elements);
         }
 
         @Override
         public List<BlockInfo> deserialize(byte[] bytes) {
-            try {
-                ByteArrayInputStream bis = new ByteArrayInputStream(bytes, 0, bytes.length);
-                ObjectInputStream ois = new ObjectInputStream(bis);
-                return (List<BlockInfo>)ois.readObject();
-            } catch (IOException|ClassNotFoundException e) {
-                throw new RuntimeException(e);
+            if (bytes == null) return null;
+
+            List<BlockInfo> blockInfoList = new ArrayList<>();
+            RLPList list = (RLPList) RLP.decode2(bytes).get(0);
+            for (RLPElement element : list) {
+                RLPList rlpBlock = (RLPList) element;
+                BlockInfo blockInfo = new BlockInfo();
+                byte[] rlpHash = rlpBlock.get(0).getRLPData();
+                blockInfo.setHash(rlpHash == null ? new byte[0] : rlpHash);
+                byte[] rlpTotalDiff = rlpBlock.get(1).getRLPData();
+                blockInfo.setTotalDifficulty(rlpTotalDiff == null ? BigInteger.ZERO : ByteUtil.bytesToBigInteger(rlpTotalDiff));
+                blockInfo.setMainChain(ByteUtil.byteArrayToInt(rlpBlock.get(2).getRLPData()) == 1);
+                blockInfoList.add(blockInfo);
             }
+
+            return blockInfoList;
         }
     };
 
@@ -480,16 +514,16 @@ public class IndexedBlockStore extends AbstractBlockstore{
 
     @Override
     public synchronized void close() {
-        logger.info("Closing IndexedBlockStore...");
-        try {
-            indexDS.close();
-        } catch (Exception e) {
-            logger.warn("Problems closing indexDS", e);
-        }
-        try {
-            blocksDS.close();
-        } catch (Exception e) {
-            logger.warn("Problems closing blocksDS", e);
-        }
+//        logger.info("Closing IndexedBlockStore...");
+//        try {
+//            indexDS.close();
+//        } catch (Exception e) {
+//            logger.warn("Problems closing indexDS", e);
+//        }
+//        try {
+//            blocksDS.close();
+//        } catch (Exception e) {
+//            logger.warn("Problems closing blocksDS", e);
+//        }
     }
 }

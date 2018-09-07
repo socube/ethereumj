@@ -1,21 +1,40 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.datasource;
 
 import org.ethereum.util.ByteUtil;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-
 /**
+ * When propagating changes to the backing Source XORs keys
+ * with the specified value
+ *
+ * May be useful for merging several Sources into a single
+ *
  * Created by Anton Nashatyrev on 18.02.2016.
  */
-public class XorDataSource implements KeyValueDataSource {
-    KeyValueDataSource source;
-    byte[] subKey;
+public class XorDataSource<V> extends AbstractChainedSource<byte[], V, byte[], V> {
+    private byte[] subKey;
 
-    public XorDataSource(KeyValueDataSource source, byte[] subKey) {
-        this.source = source;
+    /**
+     * Creates instance with a value all keys are XORed with
+     */
+    public XorDataSource(Source<byte[], V> source, byte[] subKey) {
+        super(source);
         this.subKey = subKey;
     }
 
@@ -24,61 +43,22 @@ public class XorDataSource implements KeyValueDataSource {
     }
 
     @Override
-    public byte[] get(byte[] key) {
-        return source.get(convertKey(key));
+    public V get(byte[] key) {
+        return getSource().get(convertKey(key));
     }
 
     @Override
-    public byte[] put(byte[] key, byte[] value) {
-        return source.put(convertKey(key), value);
+    public void put(byte[] key, V value) {
+        getSource().put(convertKey(key), value);
     }
 
     @Override
     public void delete(byte[] key) {
-        source.delete(convertKey(key));
+        getSource().delete(convertKey(key));
     }
 
     @Override
-    public Set<byte[]> keys() {
-        Set<byte[]> keys = source.keys();
-        HashSet<byte[]> ret = new HashSet<>(keys.size());
-        for (byte[] key : keys) {
-            ret.add(convertKey(key));
-        }
-        return ret;
-    }
-
-    @Override
-    public void updateBatch(Map<byte[], byte[]> rows) {
-        Map<byte[], byte[]> converted = new HashMap<>(rows.size());
-        for (Map.Entry<byte[], byte[]> entry : rows.entrySet()) {
-            converted.put(convertKey(entry.getKey()), entry.getValue());
-        }
-        source.updateBatch(converted);
-    }
-
-    @Override
-    public void setName(String name) {
-        source.setName(name);
-    }
-
-    @Override
-    public String getName() {
-        return source.getName();
-    }
-
-    @Override
-    public void init() {
-        source.init();
-    }
-
-    @Override
-    public boolean isAlive() {
-        return source.isAlive();
-    }
-
-    @Override
-    public void close() {
-        source.close();
+    protected boolean flushImpl() {
+        return false;
     }
 }

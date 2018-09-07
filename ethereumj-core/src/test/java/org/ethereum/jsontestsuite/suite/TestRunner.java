@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.jsontestsuite.suite;
 
 import org.ethereum.config.CommonConfig;
@@ -7,8 +24,7 @@ import org.ethereum.core.BlockchainImpl;
 import org.ethereum.core.ImportResult;
 import org.ethereum.core.PendingStateImpl;
 import org.ethereum.core.Repository;
-import org.ethereum.datasource.HashMapDB;
-import org.ethereum.datasource.MapDB;
+import org.ethereum.datasource.inmem.HashMapDB;
 import org.ethereum.db.*;
 import org.ethereum.jsontestsuite.suite.builder.BlockBuilder;
 import org.ethereum.jsontestsuite.suite.builder.RepositoryBuilder;
@@ -78,8 +94,8 @@ public class TestRunner {
         Repository repository = RepositoryBuilder.build(testCase.getPre());
 
         IndexedBlockStore blockStore = new IndexedBlockStore();
-        blockStore.init(new HashMapDB(), new HashMapDB());
-        blockStore.saveBlock(genesis, genesis.getCumulativeDifficulty(), true);
+        blockStore.init(new HashMapDB<byte[]>(), new HashMapDB<byte[]>());
+        blockStore.saveBlock(genesis, genesis.getDifficultyBI(), true);
 
         ProgramInvokeFactoryImpl programInvokeFactory = new ProgramInvokeFactoryImpl();
 
@@ -87,11 +103,11 @@ public class TestRunner {
                 .withParentBlockHeaderValidator(CommonConfig.getDefault().parentHeaderValidator());
         blockchain.byTest = true;
 
-        PendingStateImpl pendingState = new PendingStateImpl(new EthereumListenerAdapter(), blockchain);
+        PendingStateImpl pendingState = new PendingStateImpl(new EthereumListenerAdapter());
 
         blockchain.setBestBlock(genesis);
-        blockchain.setTotalDifficulty(genesis.getCumulativeDifficulty());
-        blockchain.setParentHeaderValidator(new DependentBlockHeaderRuleAdapter());
+        blockchain.setTotalDifficulty(genesis.getDifficultyBI());
+        blockchain.setParentHeaderValidator(new CommonConfig().parentHeaderValidator());
         blockchain.setProgramInvokeFactory(programInvokeFactory);
 
         blockchain.setPendingState(pendingState);
@@ -132,7 +148,7 @@ public class TestRunner {
 
             ImportResult importResult = blockchain.tryToConnect(block);
             logger.debug("{} ~ {} difficulty: {} ::: {}", block.getShortHash(), shortHash(block.getParentHash()),
-                    block.getCumulativeDifficulty(), importResult.toString());
+                    block.getDifficultyBI(), importResult.toString());
         }
 
         repository = blockchain.getRepository();
@@ -141,7 +157,8 @@ public class TestRunner {
         List<String> results = new ArrayList<>();
         String currRoot = Hex.toHexString(repository.getRoot());
 
-        byte[] bestHash = Hex.decode(testCase.getLastblockhash());
+        byte[] bestHash = Hex.decode(testCase.getLastblockhash().startsWith("0x") ?
+                testCase.getLastblockhash().substring(2) : testCase.getLastblockhash());
         String finalRoot = Hex.toHexString(blockStore.getBlockByHash(bestHash).getStateRoot());
 
         if (!finalRoot.equals(currRoot)){
@@ -167,7 +184,9 @@ public class TestRunner {
 
 
         logger.info("--------- PRE ---------");
-        Repository repository = loadRepository(new EnvTestRepository(new RepositoryRoot(new MapDB<byte[]>())), testCase.getPre());
+        IterableTestRepository testRepository = new IterableTestRepository(new RepositoryRoot(new HashMapDB<byte[]>()));
+        testRepository.environmental = true;
+        Repository repository = loadRepository(testRepository, testCase.getPre());
 
         try {
 
@@ -218,7 +237,7 @@ public class TestRunner {
             String content = program.getTrace().asJsonString(true);
             saveProgramTraceFile(SystemProperties.getDefault(), testCase.getName(), content);
 
-            if (testCase.getPost().size() == 0) {
+            if (testCase.getPost() == null) {
                 if (!vmDidThrowAnEception) {
                     String output =
                             "VM was expected to throw an exception";
@@ -240,161 +259,102 @@ public class TestRunner {
                 logger.info("--------- POST --------");
 
                 /* 5. Assert Post values */
-                for (ByteArrayWrapper key : testCase.getPost().keySet()) {
+                if (testCase.getPost() != null) {
+                    for (ByteArrayWrapper key : testCase.getPost().keySet()) {
 
-                    AccountState accountState = testCase.getPost().get(key);
+                        AccountState accountState = testCase.getPost().get(key);
 
-                    long expectedNonce = accountState.getNonceLong();
-                    BigInteger expectedBalance = accountState.getBigIntegerBalance();
-                    byte[] expectedCode = accountState.getCode();
+                        long expectedNonce = accountState.getNonceLong();
+                        BigInteger expectedBalance = accountState.getBigIntegerBalance();
+                        byte[] expectedCode = accountState.getCode();
 
-                    boolean accountExist = (null != repository.getAccountState(key.getData()));
-                    if (!accountExist) {
-
-                        String output =
-                                String.format("The expected account does not exist. key: [ %s ]",
-                                        Hex.toHexString(key.getData()));
-                        logger.info(output);
-                        results.add(output);
-                        continue;
-                    }
-
-                    long actualNonce = repository.getNonce(key.getData()).longValue();
-                    BigInteger actualBalance = repository.getBalance(key.getData());
-                    byte[] actualCode = repository.getCode(key.getData());
-                    if (actualCode == null) actualCode = "".getBytes();
-
-                    if (expectedNonce != actualNonce) {
-
-                        String output =
-                                String.format("The nonce result is different. key: [ %s ],  expectedNonce: [ %d ] is actualNonce: [ %d ] ",
-                                        Hex.toHexString(key.getData()), expectedNonce, actualNonce);
-                        logger.info(output);
-                        results.add(output);
-                    }
-
-                    if (!expectedBalance.equals(actualBalance)) {
-
-                        String output =
-                                String.format("The balance result is different. key: [ %s ],  expectedBalance: [ %s ] is actualBalance: [ %s ] ",
-                                        Hex.toHexString(key.getData()), expectedBalance.toString(), actualBalance.toString());
-                        logger.info(output);
-                        results.add(output);
-                    }
-
-                    if (!Arrays.equals(expectedCode, actualCode)) {
-
-                        String output =
-                                String.format("The code result is different. account: [ %s ],  expectedCode: [ %s ] is actualCode: [ %s ] ",
-                                        Hex.toHexString(key.getData()),
-                                        Hex.toHexString(expectedCode),
-                                        Hex.toHexString(actualCode));
-                        logger.info(output);
-                        results.add(output);
-                    }
-
-                    // assert storage
-                    Map<DataWord, DataWord> storage = accountState.getStorage();
-                    for (DataWord storageKey : storage.keySet()) {
-
-                        byte[] expectedStValue = storage.get(storageKey).getData();
-
-                        ContractDetails contractDetails =
-                                program.getStorage().getContractDetails(accountState.getAddress());
-
-                        if (contractDetails == null) {
+                        boolean accountExist = (null != repository.getAccountState(key.getData()));
+                        if (!accountExist) {
 
                             String output =
-                                    String.format("Storage raw doesn't exist: key [ %s ], expectedValue: [ %s ]",
-                                            Hex.toHexString(storageKey.getData()),
-                                            Hex.toHexString(expectedStValue)
-                                    );
+                                    String.format("The expected account does not exist. key: [ %s ]",
+                                            Hex.toHexString(key.getData()));
                             logger.info(output);
                             results.add(output);
                             continue;
                         }
 
-                        DataWord actualValue = contractDetails.get(new DataWord(storageKey.getData()));
+                        long actualNonce = repository.getNonce(key.getData()).longValue();
+                        BigInteger actualBalance = repository.getBalance(key.getData());
+                        byte[] actualCode = repository.getCode(key.getData());
+                        if (actualCode == null) actualCode = "".getBytes();
 
-                        if (actualValue == null ||
-                                !Arrays.equals(expectedStValue, actualValue.getData())) {
+                        if (expectedNonce != actualNonce) {
 
                             String output =
-                                    String.format("Storage value different: key [ %s ], expectedValue: [ %s ], actualValue: [ %s ]",
-                                            Hex.toHexString(storageKey.getData()),
-                                            Hex.toHexString(expectedStValue),
-                                            actualValue == null ? "" : Hex.toHexString(actualValue.getNoLeadZeroesData()));
+                                    String.format("The nonce result is different. key: [ %s ],  expectedNonce: [ %d ] is actualNonce: [ %d ] ",
+                                            Hex.toHexString(key.getData()), expectedNonce, actualNonce);
                             logger.info(output);
                             results.add(output);
                         }
-                    }
+
+                        if (!expectedBalance.equals(actualBalance)) {
+
+                            String output =
+                                    String.format("The balance result is different. key: [ %s ],  expectedBalance: [ %s ] is actualBalance: [ %s ] ",
+                                            Hex.toHexString(key.getData()), expectedBalance.toString(), actualBalance.toString());
+                            logger.info(output);
+                            results.add(output);
+                        }
+
+                        if (!Arrays.equals(expectedCode, actualCode)) {
+
+                            String output =
+                                    String.format("The code result is different. account: [ %s ],  expectedCode: [ %s ] is actualCode: [ %s ] ",
+                                            Hex.toHexString(key.getData()),
+                                            Hex.toHexString(expectedCode),
+                                            Hex.toHexString(actualCode));
+                            logger.info(output);
+                            results.add(output);
+                        }
+
+                        // assert storage
+                        Map<DataWord, DataWord> storage = accountState.getStorage();
+                        for (DataWord storageKey : storage.keySet()) {
+
+                            byte[] expectedStValue = storage.get(storageKey).getData();
+
+                            ContractDetails contractDetails =
+                                    program.getStorage().getContractDetails(accountState.getAddress());
+
+                            if (contractDetails == null) {
+
+                                String output =
+                                        String.format("Storage raw doesn't exist: key [ %s ], expectedValue: [ %s ]",
+                                                Hex.toHexString(storageKey.getData()),
+                                                Hex.toHexString(expectedStValue)
+                                        );
+                                logger.info(output);
+                                results.add(output);
+                                continue;
+                            }
+
+                            Map<DataWord, DataWord> testStorage = contractDetails.getStorage();
+                            DataWord actualValue = testStorage.get(DataWord.of(storageKey.getData()));
+
+                            if (actualValue == null ||
+                                    !Arrays.equals(expectedStValue, actualValue.getData())) {
+
+                                String output =
+                                        String.format("Storage value different: key [ %s ], expectedValue: [ %s ], actualValue: [ %s ]",
+                                                Hex.toHexString(storageKey.getData()),
+                                                Hex.toHexString(expectedStValue),
+                                                actualValue == null ? "" : Hex.toHexString(actualValue.getNoLeadZeroesData()));
+                                logger.info(output);
+                                results.add(output);
+                            }
+                        }
 
                     /* asset logs */
-                    List<LogInfo> logResult = program.getResult().getLogInfoList();
+                        List<LogInfo> logResult = program.getResult().getLogInfoList();
 
-                    Iterator<LogInfo> postLogs = logs.getIterator();
-                    int i = 0;
-                    while (postLogs.hasNext()) {
-
-                        LogInfo expectedLogInfo = postLogs.next();
-
-                        LogInfo foundLogInfo = null;
-                        if (logResult.size() > i)
-                            foundLogInfo = logResult.get(i);
-
-                        if (foundLogInfo == null) {
-                            String output =
-                                    String.format("Expected log [ %s ]", expectedLogInfo.toString());
-                            logger.info(output);
-                            results.add(output);
-                        } else {
-                            if (!Arrays.equals(expectedLogInfo.getAddress(), foundLogInfo.getAddress())) {
-                                String output =
-                                        String.format("Expected address [ %s ], found [ %s ]", Hex.toHexString(expectedLogInfo.getAddress()), Hex.toHexString(foundLogInfo.getAddress()));
-                                logger.info(output);
-                                results.add(output);
-                            }
-
-                            if (!Arrays.equals(expectedLogInfo.getData(), foundLogInfo.getData())) {
-                                String output =
-                                        String.format("Expected data [ %s ], found [ %s ]", Hex.toHexString(expectedLogInfo.getData()), Hex.toHexString(foundLogInfo.getData()));
-                                logger.info(output);
-                                results.add(output);
-                            }
-
-                            if (!expectedLogInfo.getBloom().equals(foundLogInfo.getBloom())) {
-                                String output =
-                                        String.format("Expected bloom [ %s ], found [ %s ]",
-                                                Hex.toHexString(expectedLogInfo.getBloom().getData()),
-                                                Hex.toHexString(foundLogInfo.getBloom().getData()));
-                                logger.info(output);
-                                results.add(output);
-                            }
-
-                            if (expectedLogInfo.getTopics().size() != foundLogInfo.getTopics().size()) {
-                                String output =
-                                        String.format("Expected number of topics [ %d ], found [ %d ]",
-                                                expectedLogInfo.getTopics().size(), foundLogInfo.getTopics().size());
-                                logger.info(output);
-                                results.add(output);
-                            } else {
-                                int j = 0;
-                                for (DataWord topic : expectedLogInfo.getTopics()) {
-                                    byte[] foundTopic = foundLogInfo.getTopics().get(j).getData();
-
-                                    if (!Arrays.equals(topic.getData(), foundTopic)) {
-                                        String output =
-                                                String.format("Expected topic [ %s ], found [ %s ]", Hex.toHexString(topic.getData()), Hex.toHexString(foundTopic));
-                                        logger.info(output);
-                                        results.add(output);
-                                    }
-
-                                    ++j;
-                                }
-                            }
-                        }
-
-                        ++i;
+                        List<String> logResults = logs.compareToReal(logResult);
+                        results.addAll(logResults);
                     }
                 }
 
@@ -537,7 +497,7 @@ public class TestRunner {
         return transaction;
     }
 
-    public Repository loadRepository(RepositoryImpl track, Map<ByteArrayWrapper, AccountState> pre) {
+    public Repository loadRepository(Repository track, Map<ByteArrayWrapper, AccountState> pre) {
 
 
             /* 1. Store pre-exist accounts - Pre */

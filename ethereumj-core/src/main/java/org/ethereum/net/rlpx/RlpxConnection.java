@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import org.ethereum.net.p2p.P2pMessage;
@@ -6,6 +23,8 @@ import org.slf4j.LoggerFactory;
 import org.spongycastle.util.encoders.Hex;
 
 import java.io.*;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Created by devrandom on 2015-04-12.
@@ -40,14 +59,14 @@ public class RlpxConnection {
             // TODO handle disconnect
             byte[] wire = new byte[frame.size];
             frame.payload.read(wire);
-            System.out.println("packet " + Hex.toHexString(wire));
+            System.out.println("packet " + toHexString(wire));
             handshakeMessage = HandshakeMessage.parse(wire);
             logger.info(" ===> " + handshakeMessage);
         } else {
             System.out.println("packet type " + frame.type);
             byte[] wire = new byte[frame.size];
             frame.payload.read(wire);
-            System.out.println("packet " + Hex.toHexString(wire));
+            System.out.println("packet " + toHexString(wire));
         }
     }
 

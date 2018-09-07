@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm.program;
 
 import org.ethereum.vm.DataWord;
@@ -55,6 +72,7 @@ public class Memory implements ProgramListenerAware {
     }
 
     public void write(int address, byte[] data, int dataSize, boolean limited) {
+        if (dataSize <= 0) return;
 
         if (data.length < dataSize)
             dataSize = data.length;
@@ -90,7 +108,7 @@ public class Memory implements ProgramListenerAware {
 
     public void extendAndWrite(int address, int allocSize, byte[] data) {
         extend(address, allocSize);
-        write(address, data, data.length, false);
+        write(address, data, allocSize, false);
     }
 
     public void extend(int address, int size) {
@@ -113,7 +131,7 @@ public class Memory implements ProgramListenerAware {
     }
 
     public DataWord readWord(int address) {
-        return new DataWord(read(address, 32));
+        return DataWord.of(read(address, 32));
     }
 
     // just access expecting all data valid

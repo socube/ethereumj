@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import org.ethereum.db.ByteArrayWrapper;
@@ -13,7 +30,7 @@ import java.util.Set;
  * @author Roman Mandeleil
  * @since 08.09.2014
  */
-public interface Repository {
+public interface Repository extends org.ethereum.facade.Repository{
 
     /**
      * Create a new account in the database
@@ -55,6 +72,15 @@ public interface Repository {
     BigInteger increaseNonce(byte[] addr);
 
     /**
+     * Sets the account nonce of the given account
+     *
+     * @param addr of the account
+     * @param nonce new nonce
+     * @return new value of the nonce
+     */
+    BigInteger setNonce(byte[] addr, BigInteger nonce);
+
+    /**
      * Get current nonce of a given account
      *
      * @param addr of the account
@@ -87,6 +113,14 @@ public interface Repository {
      * @return code in byte-array format
      */
     byte[] getCode(byte[] addr);
+
+    /**
+     * Retrieve the code hash associated with an account
+     *
+     * @param addr of the account
+     * @return code hash
+     */
+    byte[] getCodeHash(byte[] addr);
 
     /**
      * Put a value in storage of an account at a given key
@@ -201,7 +235,4 @@ public interface Repository {
                      HashMap<ByteArrayWrapper, ContractDetails> cacheDetails);
 
     Repository getSnapshotTo(byte[] root);
-
-
-
 }

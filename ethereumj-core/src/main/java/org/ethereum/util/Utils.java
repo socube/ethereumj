@@ -1,8 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.util;
 
-import org.ethereum.datasource.KeyValueDataSource;
+import org.ethereum.datasource.DbSource;
 import org.ethereum.db.ByteArrayWrapper;
 import org.ethereum.vm.DataWord;
+import org.slf4j.LoggerFactory;
 import org.spongycastle.util.encoders.DecoderException;
 import org.spongycastle.util.encoders.Hex;
 
@@ -22,7 +40,7 @@ import java.util.regex.Pattern;
 import javax.swing.*;
 
 public class Utils {
-    private static final DataWord DIVISOR = new DataWord(64);
+    private static final DataWord DIVISOR = DataWord.of(64);
 
     private static SecureRandom random = new SecureRandom();
 
@@ -54,6 +72,20 @@ public class Utils {
         Date date = new Date(timestamp * 1000);
         DateFormat formatter = new SimpleDateFormat("yyyy.MM.dd HH:mm:ss");
         return formatter.format(date);
+    }
+
+    public static String longToTimePeriod(long msec) {
+        if (msec < 1000) return msec + "ms";
+        if (msec < 3000) return String.format("%.2fs", msec / 1000d);
+        if (msec < 60 * 1000) return (msec / 1000) + "s";
+        long sec = msec / 1000;
+        if (sec < 5 * 60) return (sec / 60) +  "m" + (sec % 60) + "s";
+        long min = sec / 60;
+        if (min < 60) return min + "m";
+        long hour = min / 60;
+        if (min < 24 * 60) return hour + "h" + (min % 60) + "m";
+        long day = hour / 24;
+        return day + "d" + (hour % 24) + "h";
     }
 
     public static ImageIcon getImageIcon(String resource) {
@@ -186,7 +218,7 @@ public class Utils {
         }
     }
 
-    public static List<ByteArrayWrapper> dumpKeys(KeyValueDataSource ds) {
+    public static List<ByteArrayWrapper> dumpKeys(DbSource<byte[]> ds) {
 
         ArrayList<ByteArrayWrapper> keys = new ArrayList<>();
 
@@ -198,10 +230,73 @@ public class Utils {
     }
 
     public static DataWord allButOne64th(DataWord dw) {
-        DataWord ret = dw.clone();
-        DataWord d = dw.clone();
-        d.div(DIVISOR);
-        ret.sub(d);
-        return ret;
+        DataWord divResult = dw.div(DIVISOR);
+        return dw.sub(divResult);
+    }
+
+    /**
+     * Show std err messages in red and throw RuntimeException to stop execution.
+     */
+    public static void showErrorAndExit(String message, String... messages) {
+        LoggerFactory.getLogger("general").error(message);
+        final String ANSI_RED = "\u001B[31m";
+        final String ANSI_RESET = "\u001B[0m";
+
+        System.err.println(ANSI_RED);
+        System.err.println("");
+        System.err.println("        " + message);
+        for (String msg : messages) {
+            System.err.println("        " + msg);
+        }
+        System.err.println("");
+        System.err.println(ANSI_RESET);
+
+        throw new RuntimeException(message);
+    }
+
+    /**
+     * Show std warning messages in red.
+     */
+    public static void showWarn(String message, String... messages) {
+        LoggerFactory.getLogger("general").warn(message);
+        final String ANSI_RED = "\u001B[31m";
+        final String ANSI_RESET = "\u001B[0m";
+
+        System.err.println(ANSI_RED);
+        System.err.println("");
+        System.err.println("        " + message);
+        for (String msg : messages) {
+            System.err.println("        " + msg);
+        }
+        System.err.println("");
+        System.err.println(ANSI_RESET);
+    }
+
+    public static String sizeToStr(long size) {
+        if (size < 2 * (1L << 10)) return size + "b";
+        if (size < 2 * (1L << 20)) return String.format("%dKb", size / (1L << 10));
+        if (size < 2 * (1L << 30)) return String.format("%dMb", size / (1L << 20));
+        return String.format("%dGb", size / (1L << 30));
+    }
+
+    public static void sleep(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public static boolean isHexEncoded(String value) {
+        if (value == null) return false;
+        if ("".equals(value)) return true;
+
+        try {
+            //noinspection ResultOfMethodCallIgnored
+            new BigInteger(value, 16);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 }

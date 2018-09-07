@@ -1,4 +1,33 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
+
+import static org.ethereum.listener.EthereumListener.PendingTransactionState.DROPPED;
+import static org.ethereum.listener.EthereumListener.PendingTransactionState.INCLUDED;
+import static org.ethereum.listener.EthereumListener.PendingTransactionState.NEW_PENDING;
+import static org.ethereum.listener.EthereumListener.PendingTransactionState.PENDING;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
 
 import org.apache.commons.collections4.map.LRUMap;
 import org.ethereum.config.CommonConfig;
@@ -14,13 +43,10 @@ import org.ethereum.util.FastByteComparisons;
 import org.ethereum.vm.program.invoke.ProgramInvokeFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
-
-import static org.ethereum.listener.EthereumListener.PendingTransactionState.*;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Keeps logic providing pending state management
@@ -33,17 +59,13 @@ public class PendingStateImpl implements PendingState {
 
     public static class TransactionSortedSet extends TreeSet<Transaction> {
         public TransactionSortedSet() {
-            super(new Comparator<Transaction>() {
-
-                @Override
-                public int compare(Transaction tx1, Transaction tx2) {
-                    long nonceDiff = ByteUtil.byteArrayToLong(tx1.getNonce()) -
-                            ByteUtil.byteArrayToLong(tx2.getNonce());
-                    if (nonceDiff != 0) {
-                        return nonceDiff > 0 ? 1 : -1;
-                    }
-                    return FastByteComparisons.compareTo(tx1.getHash(), 0, 32, tx2.getHash(), 0, 32);
+            super((tx1, tx2) -> {
+                long nonceDiff = ByteUtil.byteArrayToLong(tx1.getNonce()) -
+                        ByteUtil.byteArrayToLong(tx2.getNonce());
+                if (nonceDiff != 0) {
+                    return nonceDiff > 0 ? 1 : -1;
                 }
+                return FastByteComparisons.compareTo(tx1.getHash(), 0, 32, tx2.getHash(), 0, 32);
             });
         }
     }
@@ -85,13 +107,9 @@ public class PendingStateImpl implements PendingState {
     private Block best = null;
 
     @Autowired
-    public PendingStateImpl(final EthereumListener listener, final BlockchainImpl blockchain) {
+    public PendingStateImpl(final EthereumListener listener) {
         this.listener = listener;
-        this.blockchain = blockchain;
 //        this.repository = blockchain.getRepository();
-        this.blockStore = blockchain.getBlockStore();
-        this.programInvokeFactory = blockchain.getProgramInvokeFactory();
-        this.transactionStore = blockchain.getTransactionStore();
     }
 
     public void init() {
@@ -99,7 +117,7 @@ public class PendingStateImpl implements PendingState {
     }
 
     private Repository getOrigRepository() {
-        return blockchain.getRepository();
+        return blockchain.getRepositorySnapshot();
     }
 
     @Override
@@ -182,7 +200,7 @@ public class PendingStateImpl implements PendingState {
         if (logger.isDebugEnabled()) {
             logger.debug(String.format("PendingTransactionUpdate: (Tot: %3s) %12s : %s %8s %s [%s]",
                     getPendingTransactions().size(),
-                    state, Hex.toHexString(txReceipt.getTransaction().getSender()).substring(0, 8),
+                    state, toHexString(txReceipt.getTransaction().getSender()).substring(0, 8),
                     ByteUtil.byteArrayToLong(txReceipt.getTransaction().getNonce()),
                     block.getShortDescr(), txReceipt.getError()));
         }
@@ -226,9 +244,14 @@ public class PendingStateImpl implements PendingState {
 
     // validations which are not performed within executeTx
     private String validate(Transaction tx) {
+        try {
+            tx.verify();
+        } catch (Exception e) {
+            return String.format("Invalid transaction: %s", e.getMessage());
+        }
 
-        if (config.getMineMinGasPrice().compareTo(ByteUtil.bytesToBigInteger(tx.gasPrice)) > 0) {
-            return "Too low gas price for transaction: " + ByteUtil.bytesToBigInteger(tx.gasPrice);
+        if (config.getMineMinGasPrice().compareTo(ByteUtil.bytesToBigInteger(tx.getGasPrice())) > 0) {
+            return "Too low gas price for transaction: " + ByteUtil.bytesToBigInteger(tx.getGasPrice());
         }
 
         return null;
@@ -329,7 +352,7 @@ public class PendingStateImpl implements PendingState {
                 logger.trace(
                         "Clear outdated pending transaction, block.number: [{}] hash: [{}]",
                         tx.getBlockNumber(),
-                        Hex.toHexString(tx.getHash())
+                        toHexString(tx.getHash())
                 );
 
         pendingTransactions.removeAll(outdated);
@@ -342,7 +365,7 @@ public class PendingStateImpl implements PendingState {
 
             if (pendingTransactions.remove(pend)) {
                 try {
-                    logger.trace("Clear pending transaction, hash: [{}]", Hex.toHexString(tx.getHash()));
+                    logger.trace("Clear pending transaction, hash: [{}]", toHexString(tx.getHash()));
                     TransactionReceipt receipt;
                     if (receipts != null) {
                         receipt = receipts.get(i);
@@ -369,21 +392,27 @@ public class PendingStateImpl implements PendingState {
 
         pendingState = getOrigRepository().startTracking();
 
+        long t = System.nanoTime();
+
         for (PendingTransaction tx : pendingTransactions) {
             TransactionReceipt receipt = executeTx(tx.getTransaction());
             fireTxUpdate(receipt, PENDING, block);
         }
+
+        logger.debug("Successfully processed #{}, txs: {}, time: {}s", block.getNumber(), pendingTransactions.size(),
+                String.format("%.3f", (System.nanoTime() - t) / 1_000_000_000d));
     }
 
     private TransactionReceipt executeTx(Transaction tx) {
 
-        logger.trace("Apply pending state tx: {}", Hex.toHexString(tx.getHash()));
+        logger.trace("Apply pending state tx: {}", toHexString(tx.getHash()));
 
         Block best = getBestBlock();
 
-        TransactionExecutor executor = commonConfig.transactionExecutor(
+        TransactionExecutor executor = new TransactionExecutor(
                 tx, best.getCoinbase(), getRepository(),
-                blockStore, programInvokeFactory, createFakePendingBlock(), new EthereumListenerAdapter(), 0);
+                blockStore, programInvokeFactory, createFakePendingBlock(), new EthereumListenerAdapter(), 0)
+                .withCommonConfig(commonConfig);
 
         executor.init();
         executor.execute();
@@ -415,7 +444,11 @@ public class PendingStateImpl implements PendingState {
         return block;
     }
 
+    @Autowired
     public void setBlockchain(BlockchainImpl blockchain) {
         this.blockchain = blockchain;
+        this.blockStore = blockchain.getBlockStore();
+        this.programInvokeFactory = blockchain.getProgramInvokeFactory();
+        this.transactionStore = blockchain.getTransactionStore();
     }
 }

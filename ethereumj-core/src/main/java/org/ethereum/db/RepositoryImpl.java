@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.db;
 
 import org.ethereum.config.SystemProperties;
@@ -8,8 +25,6 @@ import org.ethereum.crypto.HashUtil;
 import org.ethereum.datasource.*;
 import org.ethereum.util.ByteUtil;
 import org.ethereum.util.FastByteComparisons;
-import org.ethereum.util.RLP;
-import org.ethereum.util.Value;
 import org.ethereum.vm.DataWord;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -47,7 +62,7 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
     }
 
     @Override
-    public AccountState createAccount(byte[] addr) {
+    public synchronized AccountState createAccount(byte[] addr) {
         AccountState state = new AccountState(config.getBlockchainConfig().getCommonConstants().getInitialNonce(),
                 BigInteger.ZERO);
         accountStateCache.put(addr, state);
@@ -55,16 +70,16 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
     }
 
     @Override
-    public boolean isExist(byte[] addr) {
+    public synchronized boolean isExist(byte[] addr) {
         return getAccountState(addr) != null;
     }
 
     @Override
-    public AccountState getAccountState(byte[] addr) {
+    public synchronized AccountState getAccountState(byte[] addr) {
         return accountStateCache.get(addr);
     }
 
-    AccountState getOrCreateAccountState(byte[] addr) {
+    synchronized AccountState getOrCreateAccountState(byte[] addr) {
         AccountState ret = accountStateCache.get(addr);
         if (ret == null) {
             ret = createAccount(addr);
@@ -73,62 +88,70 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
     }
 
     @Override
-    public void delete(byte[] addr) {
+    public synchronized void delete(byte[] addr) {
         accountStateCache.delete(addr);
+        storageCache.delete(addr);
     }
 
     @Override
-    public BigInteger increaseNonce(byte[] addr) {
+    public synchronized BigInteger increaseNonce(byte[] addr) {
         AccountState accountState = getOrCreateAccountState(addr);
         accountStateCache.put(addr, accountState.withIncrementedNonce());
         return accountState.getNonce();
     }
 
-    public BigInteger setNonce(byte[] addr, BigInteger nonce) {
+    @Override
+    public synchronized BigInteger setNonce(byte[] addr, BigInteger nonce) {
         AccountState accountState = getOrCreateAccountState(addr);
         accountStateCache.put(addr, accountState.withNonce(nonce));
         return accountState.getNonce();
     }
 
     @Override
-    public BigInteger getNonce(byte[] addr) {
+    public synchronized BigInteger getNonce(byte[] addr) {
         AccountState accountState = getAccountState(addr);
         return accountState == null ? config.getBlockchainConfig().getCommonConstants().getInitialNonce() :
                 accountState.getNonce();
     }
 
     @Override
-    public ContractDetails getContractDetails(byte[] addr) {
+    public synchronized ContractDetails getContractDetails(byte[] addr) {
         return new ContractDetailsImpl(addr);
     }
 
     @Override
-    public boolean hasContractDetails(byte[] addr) {
+    public synchronized boolean hasContractDetails(byte[] addr) {
         return getContractDetails(addr) != null;
     }
 
     @Override
-    public void saveCode(byte[] addr, byte[] code) {
+    public synchronized void saveCode(byte[] addr, byte[] code) {
         byte[] codeHash = HashUtil.sha3(code);
-        codeCache.put(codeHash, code);
+        codeCache.put(codeKey(codeHash, addr), code);
         AccountState accountState = getOrCreateAccountState(addr);
         accountStateCache.put(addr, accountState.withCodeHash(codeHash));
     }
 
     @Override
-    public byte[] getCode(byte[] addr) {
-        AccountState accountState = getAccountState(addr);
-        if (accountState != null) {
-            byte[] codeHash = accountState.getCodeHash();
-            return FastByteComparisons.equal(codeHash, HashUtil.EMPTY_DATA_HASH) ?
-                    ByteUtil.EMPTY_BYTE_ARRAY : codeCache.get(codeHash);
-        } else {
-            return ByteUtil.EMPTY_BYTE_ARRAY;
-        }
+    public synchronized byte[] getCode(byte[] addr) {
+        byte[] codeHash = getCodeHash(addr);
+        return codeHash == null || FastByteComparisons.equal(codeHash, HashUtil.EMPTY_DATA_HASH) ?
+                ByteUtil.EMPTY_BYTE_ARRAY : codeCache.get(codeKey(codeHash, addr));
+    }
+
+    // composing a key as there can be several contracts with the same code
+    private byte[] codeKey(byte[] codeHash, byte[] addr) {
+        return NodeKeyCompositor.compose(codeHash, addr);
     }
 
     @Override
-    public void addStorageRow(byte[] addr, DataWord key, DataWord value) {
+    public byte[] getCodeHash(byte[] addr) {
+        AccountState accountState = getAccountState(addr);
+        return accountState != null ? accountState.getCodeHash() : null;
+    }
+
+    @Override
+    public synchronized void addStorageRow(byte[] addr, DataWord key, DataWord value) {
         getOrCreateAccountState(addr);
 
         Source<DataWord, DataWord> contractStorage = storageCache.get(addr);
@@ -136,32 +159,33 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
     }
 
     @Override
-    public DataWord getStorageValue(byte[] addr, DataWord key) {
+    public synchronized DataWord getStorageValue(byte[] addr, DataWord key) {
         AccountState accountState = getAccountState(addr);
         return accountState == null ? null : storageCache.get(addr).get(key);
     }
 
     @Override
-    public BigInteger getBalance(byte[] addr) {
+    public synchronized BigInteger getBalance(byte[] addr) {
         AccountState accountState = getAccountState(addr);
         return accountState == null ? BigInteger.ZERO : accountState.getBalance();
     }
 
     @Override
-    public BigInteger addBalance(byte[] addr, BigInteger value) {
+    public synchronized BigInteger addBalance(byte[] addr, BigInteger value) {
         AccountState accountState = getOrCreateAccountState(addr);
         accountStateCache.put(addr, accountState.withBalanceIncrement(value));
         return accountState.getBalance();
     }
 
     @Override
-    public RepositoryImpl startTracking() {
-        CachedSourceImpl.BytesKey<AccountState> trackAccountStateCache = new CachedSourceImpl.BytesKey<>(accountStateCache);
-        CachedSourceImpl.BytesKey<byte[]> trackCodeCache = new CachedSourceImpl.BytesKey<>(codeCache);
+    public synchronized RepositoryImpl startTracking() {
+        Source<byte[], AccountState> trackAccountStateCache = new WriteCache.BytesKey<>(accountStateCache,
+                WriteCache.CacheType.SIMPLE);
+        Source<byte[], byte[]> trackCodeCache = new WriteCache.BytesKey<>(codeCache, WriteCache.CacheType.SIMPLE);
         MultiCache<CachedSource<DataWord, DataWord>> trackStorageCache = new MultiCache(storageCache) {
             @Override
             protected CachedSource create(byte[] key, CachedSource srcCache) {
-                return new CachedSourceImpl<>(srcCache);
+                return new WriteCache<>(srcCache, WriteCache.CacheType.SIMPLE);
             }
         };
 
@@ -171,19 +195,25 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
     }
 
     @Override
-    public Repository getSnapshotTo(byte[] root) {
+    public synchronized Repository getSnapshotTo(byte[] root) {
         return parent.getSnapshotTo(root);
     }
 
     @Override
-    public void commit() {
-        storageCache.flush();
-        codeCache.flush();
-        accountStateCache.flush();
+    public synchronized void commit() {
+        Repository parentSync = parent == null ? this : parent;
+        // need to synchronize on parent since between different caches flush
+        // the parent repo would not be in consistent state
+        // when no parent just take this instance as a mock
+        synchronized (parentSync) {
+            storageCache.flush();
+            codeCache.flush();
+            accountStateCache.flush();
+        }
     }
 
     @Override
-    public void rollback() {
+    public synchronized void rollback() {
         // nothing to do, will be GCed
     }
 
@@ -192,66 +222,12 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
         throw new RuntimeException("Not supported");
     }
 
-    public String getTrieDump() {
+    public synchronized String getTrieDump() {
         return dumpStateTrie();
     }
 
     public String dumpStateTrie() {
         throw new RuntimeException("Not supported");
-    }
-
-    public Value getState(byte[] stateRoot) {
-        throw new RuntimeException("Not supported");
-    }
-
-    static class AccountStateSerializer implements Serializer<AccountState, byte[]> {
-        @Override
-        public byte[] serialize(AccountState object) {
-            return object.getEncoded();
-        }
-
-        @Override
-        public AccountState deserialize(byte[] stream) {
-            return stream == null || stream.length == 0 ? null : new AccountState(stream);
-        }
-    }
-
-    static class WordSerializer implements Serializer<DataWord, byte[]> {
-        @Override
-        public byte[] serialize(DataWord object) {
-            return object.getData();
-        }
-
-        @Override
-        public DataWord deserialize(byte[] stream) {
-            return new DataWord(stream);
-        }
-    }
-
-    static class TrieWordSerializer implements Serializer<DataWord, byte[]> {
-        @Override
-        public byte[] serialize(DataWord object) {
-            return RLP.encodeElement(object.getNoLeadZeroesData());
-        }
-
-        @Override
-        public DataWord deserialize(byte[] stream) {
-            if (stream == null || stream.length == 0) return null;
-            byte[] dataDecoded = RLP.decode2(stream).get(0).getRLPData();
-            return new DataWord(dataDecoded);
-        }
-    }
-
-    public static class TrieCacheSerializer implements Serializer<Value, byte[]> {
-        @Override
-        public byte[] serialize(Value object) {
-            return object.encode();
-        }
-
-        @Override
-        public Value deserialize(byte[] stream) {
-            return Value.fromRlpEncoded(stream);
-        }
     }
 
     class ContractDetailsImpl implements ContractDetails {
@@ -338,15 +314,7 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
 
         @Override
         public Map<DataWord, DataWord> getStorage() {
-            Source<DataWord, DataWord> storage = storageCache.get(address);
-            CachedSourceImpl<DataWord, DataWord> st = (CachedSourceImpl<DataWord, DataWord>) storage;
-            Map<DataWord, DataWord> ret = new HashMap<>();
-            for (Map.Entry<DataWord, DataWord> entry : st.getCache().entrySet()) {
-                if (entry.getValue() != null) {
-                    ret.put(entry.getKey(), entry.getValue());
-                }
-            }
-            return ret;
+            throw new RuntimeException("Not supported");
         }
 
         @Override
@@ -388,12 +356,7 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
 
     @Override
     public Set<byte[]> getAccountsKeys() {
-        CachedSourceImpl.BytesKey<AccountState> cache = (CachedSourceImpl.BytesKey<AccountState>) accountStateCache;
-        Set<byte[]> ret = new HashSet<>();
-        for (Map.Entry<byte[], AccountState> entry : cache.getCache().entrySet()) {
-            if (entry.getValue() != null) ret.add(entry.getKey());
-        }
-        return ret;
+        throw new RuntimeException("Not supported");
     }
 
     @Override
@@ -467,4 +430,5 @@ public class RepositoryImpl implements Repository, org.ethereum.facade.Repositor
     public void loadAccount(byte[] addr, HashMap<ByteArrayWrapper, AccountState> cacheAccounts, HashMap<ByteArrayWrapper, ContractDetails> cacheDetails) {
         throw new RuntimeException("Not supported");
     }
+
 }

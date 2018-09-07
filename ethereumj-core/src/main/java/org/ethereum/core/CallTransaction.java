@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import static java.lang.String.format;
@@ -42,7 +59,8 @@ public class CallTransaction {
                 longToBytesNoLeadZeroes(gasLimit),
                 toAddress == null ? null : Hex.decode(toAddress),
                 longToBytesNoLeadZeroes(value),
-                data);
+                data,
+                null);
         return tx;
     }
 
@@ -68,7 +86,14 @@ public class CallTransaction {
         }
     }
 
-    enum FunctionType {
+    public enum StateMutabilityType {
+        pure,
+        view,
+        nonpayable,
+        payable
+    }
+
+    public enum FunctionType {
         constructor,
         function,
         event,
@@ -79,10 +104,11 @@ public class CallTransaction {
         public boolean anonymous;
         public boolean constant;
         public boolean payable;
-        public String name;
-        public Param[] inputs;
-        public Param[] outputs;
+        public String name = "";
+        public Param[] inputs = new Param[0];
+        public Param[] outputs = new Param[0];
         public FunctionType type;
+        public StateMutabilityType stateMutability;
 
         private Function() {}
 
@@ -199,6 +225,8 @@ public class CallTransaction {
             }
             return ret;
         }
+
+
     }
 
     public static class Contract {

@@ -1,22 +1,36 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
+import org.apache.commons.lang3.tuple.Pair;
+import org.ethereum.config.BlockchainConfig;
 import org.ethereum.config.CommonConfig;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.crypto.HashUtil;
-import org.ethereum.datasource.HashMapDB;
+import org.ethereum.datasource.inmem.HashMapDB;
+import org.ethereum.db.*;
 import org.ethereum.trie.Trie;
 import org.ethereum.trie.TrieImpl;
-import org.ethereum.db.BlockStore;
-import org.ethereum.db.ByteArrayWrapper;
-import org.ethereum.db.TransactionStore;
 import org.ethereum.listener.EthereumListener;
 import org.ethereum.listener.EthereumListenerAdapter;
 import org.ethereum.manager.AdminInfo;
 import org.ethereum.sync.SyncManager;
-import org.ethereum.util.AdvancedDeviceUtils;
-import org.ethereum.util.ByteUtil;
-import org.ethereum.util.FastByteComparisons;
-import org.ethereum.util.RLP;
+import org.ethereum.util.*;
 import org.ethereum.validator.DependentBlockHeaderRule;
 import org.ethereum.validator.ParentBlockHeaderValidator;
 import org.ethereum.vm.program.invoke.ProgramInvokeFactory;
@@ -25,6 +39,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedWriter;
@@ -34,10 +49,13 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.ConcurrentModificationException;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.Stack;
 
@@ -47,13 +65,9 @@ import static java.math.BigInteger.ONE;
 import static java.math.BigInteger.ZERO;
 import static java.util.Collections.emptyList;
 import static org.ethereum.core.Denomination.SZABO;
-import static org.ethereum.core.ImportResult.EXIST;
-import static org.ethereum.core.ImportResult.IMPORTED_BEST;
-import static org.ethereum.core.ImportResult.IMPORTED_NOT_BEST;
-import static org.ethereum.core.ImportResult.INVALID_BLOCK;
-import static org.ethereum.core.ImportResult.NO_PARENT;
+import static org.ethereum.core.ImportResult.*;
 import static org.ethereum.crypto.HashUtil.sha3;
-import static org.ethereum.util.BIUtil.isMoreThan;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * The Ethereum blockchain is in many ways similar to the Bitcoin blockchain,
@@ -96,12 +110,13 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
     private static final int MAGIC_REWARD_OFFSET = 8;
     public static final byte[] EMPTY_LIST_HASH = sha3(RLP.encodeList(new byte[0]));
 
-    @Autowired
+    @Autowired @Qualifier("defaultRepository")
     private Repository repository;
-    private Repository track;
 
     @Autowired
     protected BlockStore blockStore;
+
+    private HeaderStore headerStore = null;
 
     @Autowired
     private TransactionStore transactionStore;
@@ -134,6 +149,15 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
     @Autowired
     SyncManager syncManager;
 
+    @Autowired
+    PruneManager pruneManager;
+
+    @Autowired
+    StateSource stateDataSource;
+
+    @Autowired
+    DbFlushManager dbFlushManager;
+
     SystemProperties config = SystemProperties.getDefault();
 
     private List<Chain> altChains = new ArrayList<>();
@@ -146,8 +170,6 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
     private byte[] minerCoinbase;
     private byte[] minerExtraData;
-    private BigInteger BLOCK_REWARD;
-    private BigInteger INCLUSION_REWARD;
     private int UNCLE_LIST_LIMIT;
     private int UNCLE_GENERATION_LIMIT;
 
@@ -205,8 +227,6 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
     private void initConst(SystemProperties config) {
         minerCoinbase = config.getMinerCoinbase();
         minerExtraData = config.getMineExtraData();
-        BLOCK_REWARD = config.getBlockchainConfig().getCommonConstants().getBLOCK_REWARD();
-        INCLUSION_REWARD = BLOCK_REWARD.divide(BigInteger.valueOf(32));
         UNCLE_LIST_LIMIT = config.getBlockchainConfig().getCommonConstants().getUNCLE_LIST_LIMIT();
         UNCLE_GENERATION_LIMIT = config.getBlockchainConfig().getCommonConstants().getUNCLE_GENERATION_LIMIT();
     }
@@ -249,7 +269,7 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             }
         }
         if (txInfo == null) {
-            logger.warn("Can't find block from main chain for transaction " + Hex.toHexString(hash));
+            logger.warn("Can't find block from main chain for transaction " + toHexString(hash));
             return null;
         }
 
@@ -310,6 +330,10 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
         return repository;
     }
 
+    public Repository getRepositorySnapshot() {
+        return repository.getSnapshotTo(blockStore.getBestBlock().getStateRoot());
+    }
+
     @Override
     public BlockStore getBlockStore() {
         return blockStore;
@@ -360,7 +384,7 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             this.fork = false;
         }
 
-        if (isMoreThan(this.totalDifficulty, savedState.savedTD)) {
+        if (summary.betterThan(savedState.savedTD)) {
 
             logger.info("Rebranching: {} ~> {}", savedState.savedBest.getShortHash(), block.getShortHash());
 
@@ -372,11 +396,6 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             // The main repository rebranch
             this.repository = repo;
 //            this.repository.syncToRoot(block.getStateRoot());
-
-            // flushing
-            if (!byTest) {
-                flush();
-            }
 
             dropState();
         } else {
@@ -392,7 +411,7 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
         if (logger.isDebugEnabled())
             logger.debug("Try connect block hash: {}, number: {}",
-                    Hex.toHexString(block.getHash()).substring(0, 6),
+                    toHexString(block.getHash()).substring(0, 6),
                     block.getNumber());
 
         if (blockStore.getMaxNumber() >= block.getNumber() &&
@@ -400,7 +419,7 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
             if (logger.isDebugEnabled())
                 logger.debug("Block already exist hash: {}, number: {}",
-                        Hex.toHexString(block.getHash()).substring(0, 6),
+                        toHexString(block.getHash()).substring(0, 6),
                         block.getNumber());
 
             // retry of well known block
@@ -427,7 +446,7 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
                 summary = tryConnectAndFork(block);
 
                 ret = summary == null ? INVALID_BLOCK :
-                        (isMoreThan(getTotalDifficulty(), oldTotalDiff) ? IMPORTED_BEST : IMPORTED_NOT_BEST);
+                        (summary.betterThan(oldTotalDiff) ? IMPORTED_BEST : IMPORTED_NOT_BEST);
             } else {
                 summary = null;
                 ret = NO_PARENT;
@@ -436,16 +455,11 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
         }
 
         if (ret.isSuccessful()) {
-            listener.onBlock(summary);
+            listener.onBlock(summary, ret == IMPORTED_BEST);
             listener.trace(String.format("Block chain size: [ %d ]", this.getSize()));
 
             if (ret == IMPORTED_BEST) {
-                eventDispatchThread.invokeLater(new Runnable() {
-                    @Override
-                    public void run() {
-                        pendingState.processBest(block, summary.getReceipts());
-                    }
-                });
+                eventDispatchThread.invokeLater(() -> pendingState.processBest(block, summary.getReceipts()));
             }
         }
 
@@ -453,21 +467,28 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
     }
 
     public synchronized Block createNewBlock(Block parent, List<Transaction> txs, List<BlockHeader> uncles) {
-
+        long time = System.currentTimeMillis() / 1000;
         // adjust time to parent block this may happen due to system clocks difference
-        long time = System.currentTimeMillis() / 1000 + 10;
         if (parent.getTimestamp() >= time) time = parent.getTimestamp() + 1;
+
+        return createNewBlock(parent, txs, uncles, time);
+    }
+
+    public synchronized Block createNewBlock(Block parent, List<Transaction> txs, List<BlockHeader> uncles, long time) {
+        final long blockNumber = parent.getNumber() + 1;
+
+        final byte[] extraData = config.getBlockchainConfig().getConfigForBlock(blockNumber).getExtraData(minerExtraData, blockNumber);
 
         Block block = new Block(parent.getHash(),
                 EMPTY_LIST_HASH, // uncleHash
                 minerCoinbase,
                 new byte[0], // log bloom - from tx receipts
                 new byte[0], // difficulty computed right after block creation
-                parent.getNumber() + 1,
+                blockNumber,
                 parent.getGasLimit(), // (add to config ?)
                 0,  // gas used - computed after running all transactions
                 time,  // block time
-                minerExtraData,  // extra data
+                extraData,  // extra data
                 new byte[0],  // mixHash (to mine)
                 new byte[0],  // nonce   (to mine)
                 new byte[0],  // receiptsRoot - computed after running all transactions
@@ -505,11 +526,34 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
     }
 
     //    @Override
-    public synchronized BlockSummary add(Repository repo, Block block) {
+    public synchronized BlockSummary add(Repository repo, final Block block) {
+        BlockSummary summary = addImpl(repo, block);
+
+        if (summary == null) {
+            stateLogger.warn("Trying to reimport the block for debug...");
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+            }
+            BlockSummary summary1 = addImpl(repo.getSnapshotTo(getBestBlock().getStateRoot()), block);
+            stateLogger.warn("Second import trial " + (summary1 == null ? "FAILED" : "OK"));
+            if (summary1 != null) {
+                if (config.exitOnBlockConflict() && !byTest) {
+                    stateLogger.error("Inconsistent behavior, exiting...");
+                    System.exit(-1);
+                } else {
+                    return summary1;
+                }
+            }
+        }
+        return summary;
+    }
+
+    public synchronized BlockSummary addImpl(Repository repo, final Block block) {
 
         if (exitOn < block.getNumber()) {
             System.out.print("Exiting after block.number: " + bestBlock.getNumber());
-            flush();
+            dbFlushManager.flushSync();
             System.exit(-1);
         }
 
@@ -534,35 +578,27 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
         }
 
         BlockSummary summary = processBlock(repo, block);
-        List<TransactionReceipt> receipts = summary.getReceipts();
+        final List<TransactionReceipt> receipts = summary.getReceipts();
 
         // Sanity checks
-        String receiptHash = Hex.toHexString(block.getReceiptsRoot());
-        String receiptListHash = Hex.toHexString(calcReceiptsTrie(receipts));
 
-        if (!receiptHash.equals(receiptListHash)) {
-            logger.warn("Block's given Receipt Hash doesn't match: {} != {}", receiptHash, receiptListHash);
+        if (!FastByteComparisons.equal(block.getReceiptsRoot(), calcReceiptsTrie(receipts))) {
+            logger.warn("Block's given Receipt Hash doesn't match: {} != {}", toHexString(block.getReceiptsRoot()), toHexString(calcReceiptsTrie(receipts)));
             logger.warn("Calculated receipts: " + receipts);
             repo.rollback();
-            return null;
+            summary = null;
         }
 
-        String logBloomHash = Hex.toHexString(block.getLogBloom());
-        String logBloomListHash = Hex.toHexString(calcLogBloom(receipts));
-
-        if (!logBloomHash.equals(logBloomListHash)) {
-            logger.warn("Block's given logBloom Hash doesn't match: {} != {}", logBloomHash, logBloomListHash);
+        if (!FastByteComparisons.equal(block.getLogBloom(), calcLogBloom(receipts))) {
+            logger.warn("Block's given logBloom Hash doesn't match: {} != {}", toHexString(block.getLogBloom()), toHexString(calcLogBloom(receipts)));
             repo.rollback();
-            return null;
+            summary = null;
         }
 
-        String blockStateRootHash = Hex.toHexString(block.getStateRoot());
-        String worldStateRootHash = Hex.toHexString(repo.getRoot());
+        if (!FastByteComparisons.equal(block.getStateRoot(), repo.getRoot())) {
 
-        if (!blockStateRootHash.equals(worldStateRootHash)) {
-
-            stateLogger.warn("BLOCK: State conflict or received invalid block. block: {} worldstate {} mismatch", block.getNumber(), worldStateRootHash);
-            stateLogger.warn("Conflict block dump: {}", Hex.toHexString(block.getEncoded()));
+            stateLogger.warn("BLOCK: State conflict or received invalid block. block: {} worldstate {} mismatch", block.getNumber(), toHexString(repo.getRoot()));
+            stateLogger.warn("Conflict block dump: {}", toHexString(block.getEncoded()));
 
 //            track.rollback();
 //            repository.rollback();
@@ -575,24 +611,28 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             // block is bad so 'rollback' the state root to the original state
 //            ((RepositoryImpl) repository).setRoot(origRoot);
 
-            if (config.exitOnBlockConflict()) {
+            if (config.exitOnBlockConflict() && !byTest) {
                 adminInfo.lostConsensus();
-                System.out.println("CONFLICT: BLOCK #" + block.getNumber() + ", dump: " + Hex.toHexString(block.getEncoded()));
+                System.out.println("CONFLICT: BLOCK #" + block.getNumber() + ", dump: " + toHexString(block.getEncoded()));
                 System.exit(1);
             } else {
-                return null;
+                summary = null;
             }
         }
 
-//        track.commit();
-        repo.commit();
-        updateTotalDifficulty(block);
-        summary.setTotalDifficulty(getTotalDifficulty());
+        if (summary != null) {
+            repo.commit();
+            updateTotalDifficulty(block);
+            summary.setTotalDifficulty(getTotalDifficulty());
 
-        storeBlock(block, receipts);
-
-        if (!byTest && needFlush(block)) {
-            flush();
+            if (!byTest) {
+                dbFlushManager.commit(() -> {
+                    storeBlock(block, receipts);
+                    repository.commit();
+                });
+            } else {
+                storeBlock(block, receipts);
+            }
         }
 
         return summary;
@@ -600,31 +640,16 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
     @Override
     public void flush() {
-        repository.flush();
-        blockStore.flush();
-        transactionStore.flush();
-
-        repository = repository.getSnapshotTo(repository.getRoot());
-
-        if (isMemoryBoundFlush()) {
-            System.gc();
-        }
-    }
-
-    private boolean isMemoryBoundFlush() {
-        return !syncManager.isSyncDone() && config.cacheFlushMemory() > 0 || config.cacheFlushBlocks() == 0;
-    }
-
-    private boolean needFlush(Block block) {
-        if (syncManager.isSyncDone()) {
-            return true;
-        } else if (config.cacheFlushMemory() > 0) {
-            return needFlushByMemory(config.cacheFlushMemory());
-        } else if (config.cacheFlushBlocks() > 0) {
-            return block.getNumber() % config.cacheFlushBlocks() == 0;
-        } else {
-            return needFlushByMemory(.7);
-        }
+//        repository.flush();
+//        stateDataSource.flush();
+//        blockStore.flush();
+//        transactionStore.flush();
+//
+//        repository = repository.getSnapshotTo(repository.getRoot());
+//
+//        if (isMemoryBoundFlush()) {
+//            System.gc();
+//        }
     }
 
     private boolean needFlushByMemory(double maxMemoryPercents) {
@@ -650,8 +675,8 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
         if (receipts == null || receipts.isEmpty())
             return retBloomFilter.getData();
 
-        for (int i = 0; i < receipts.size(); i++) {
-            retBloomFilter.or(receipts.get(i).getBloomFilter());
+        for (TransactionReceipt receipt : receipts) {
+            retBloomFilter.or(receipt.getBloomFilter());
         }
 
         return retBloomFilter.getData();
@@ -694,8 +719,8 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             isValid = isValid(block.getHeader());
 
             // Sanity checks
-            String trieHash = Hex.toHexString(block.getTxTrieRoot());
-            String trieListHash = Hex.toHexString(calcTxTrie(block.getTransactionsList()));
+            String trieHash = toHexString(block.getTxTrieRoot());
+            String trieListHash = toHexString(calcTxTrie(block.getTransactionsList()));
 
 
             if (!trieHash.equals(trieListHash)) {
@@ -716,6 +741,11 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
                 for (Transaction tx : txs) {
                     byte[] txSender = tx.getSender();
+                    if (txSender == null) {
+                        logger.warn("Invalid transaction: sender in tx with rlp={} is null." +
+                                "Not valid until EIP-86", ByteUtil.toHexString(tx.getEncoded()));
+                        return false;
+                    }
                     ByteArrayWrapper key = new ByteArrayWrapper(txSender);
                     BigInteger expectedNonce = curNonce.get(key);
                     if (expectedNonce == null) {
@@ -736,8 +766,8 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
     }
 
     public boolean validateUncles(Block block) {
-        String unclesHash = Hex.toHexString(block.getHeader().getUnclesHash());
-        String unclesListHash = Hex.toHexString(HashUtil.sha3(block.getHeader().getUnclesEncoded(block.getUncleList())));
+        String unclesHash = toHexString(block.getHeader().getUnclesHash());
+        String unclesListHash = toHexString(HashUtil.sha3(block.getHeader().getUnclesEncoded(block.getUncleList())));
 
         if (!unclesHash.equals(unclesListHash)) {
             logger.warn("Block's given Uncle Hash doesn't match: {} != {}", unclesHash, unclesListHash);
@@ -768,18 +798,18 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
             ByteArrayWrapper uncleHash = new ByteArrayWrapper(uncle.getHash());
             if (ancestors.contains(uncleHash)) {
-                logger.warn("Uncle is direct ancestor: " + Hex.toHexString(uncle.getHash()));
+                logger.warn("Uncle is direct ancestor: " + toHexString(uncle.getHash()));
                 return false;
             }
 
             if (usedUncles.contains(uncleHash)) {
-                logger.warn("Uncle is not unique: " + Hex.toHexString(uncle.getHash()));
+                logger.warn("Uncle is not unique: " + toHexString(uncle.getHash()));
                 return false;
             }
 
             Block uncleParent = blockStore.getBlockByHash(uncle.getParentHash());
             if (!ancestors.contains(new ByteArrayWrapper(uncleParent.getHash()))) {
-                logger.warn("Uncle has no common parent: " + Hex.toHexString(uncle.getHash()));
+                logger.warn("Uncle has no common parent: " + toHexString(uncle.getHash()));
                 return false;
             }
         }
@@ -821,9 +851,7 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
     private BlockSummary processBlock(Repository track, Block block) {
 
         if (!block.isGenesis() && !config.blockChainOnly()) {
-            // wallet.addTransactions(block.getTransactionsList());
             return applyBlock(track, block);
-            // wallet.processBlock(block);
         }
         else {
             return new BlockSummary(block, new HashMap<byte[], BigInteger>(), new ArrayList<TransactionReceipt>(), new ArrayList<TransactionExecutionSummary>());
@@ -834,7 +862,8 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
         logger.debug("applyBlock: block: [{}] tx.list: [{}]", block.getNumber(), block.getTransactionsList().size());
 
-        config.getBlockchainConfig().getConfigForBlock(block.getNumber()).hardForkTransfers(block, track);
+        BlockchainConfig blockchainConfig = config.getBlockchainConfig().getConfigForBlock(block.getNumber());
+        blockchainConfig.hardForkTransfers(block, track);
 
         long saveTime = System.nanoTime();
         int i = 1;
@@ -846,8 +875,9 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             stateLogger.debug("apply block: [{}] tx: [{}] ", block.getNumber(), i);
 
             Repository txTrack = track.startTracking();
-            TransactionExecutor executor = commonConfig.transactionExecutor(tx, block.getCoinbase(),
-                    txTrack, blockStore, programInvokeFactory, block, listener, totalGasUsed);
+            TransactionExecutor executor = new TransactionExecutor(tx, block.getCoinbase(),
+                    txTrack, blockStore, programInvokeFactory, block, listener, totalGasUsed)
+                    .withCommonConfig(commonConfig);
 
             executor.init();
             executor.execute();
@@ -857,16 +887,22 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             totalGasUsed += executor.getGasUsed();
 
             txTrack.commit();
-            TransactionReceipt receipt = executor.getReceipt();
-            receipt.setPostTxState(track.getRoot());
+            final TransactionReceipt receipt = executor.getReceipt();
 
-            stateLogger.info("block: [{}] executed tx: [{}] \n  state: [{}]", block.getNumber(), i,
-                    Hex.toHexString(track.getRoot()));
+            if (blockchainConfig.eip658()) {
+                receipt.setTxStatus(receipt.isSuccessful());
+            } else {
+                receipt.setPostTxState(track.getRoot());
+            }
+
+            if (stateLogger.isInfoEnabled())
+                stateLogger.info("block: [{}] executed tx: [{}] \n  state: [{}]", block.getNumber(), i,
+                        toHexString(track.getRoot()));
 
             stateLogger.info("[{}] ", receipt.toString());
 
             if (stateLogger.isInfoEnabled())
-                stateLogger.info("tx[{}].receipt: [{}] ", i, Hex.toHexString(receipt.getEncoded()));
+                stateLogger.info("tx[{}].receipt: [{}] ", i, toHexString(receipt.getEncoded()));
 
             // TODO
 //            if (block.getNumber() >= config.traceStartBlock())
@@ -880,11 +916,10 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
         Map<byte[], BigInteger> rewards = addReward(track, block, summaries);
 
-//        track.commit();
-
-        stateLogger.info("applied reward for block: [{}]  \n  state: [{}]",
-                block.getNumber(),
-                Hex.toHexString(track.getRoot()));
+        if (stateLogger.isInfoEnabled())
+            stateLogger.info("applied reward for block: [{}]  \n  state: [{}]",
+                    block.getNumber(),
+                    toHexString(track.getRoot()));
 
 
         // TODO
@@ -908,10 +943,13 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
         Map<byte[], BigInteger> rewards = new HashMap<>();
 
+        BigInteger blockReward = config.getBlockchainConfig().getConfigForBlock(block.getNumber()).getConstants().getBLOCK_REWARD();
+        BigInteger inclusionReward = blockReward.divide(BigInteger.valueOf(32));
+
         // Add extra rewards based on number of uncles
         if (block.getUncleList().size() > 0) {
             for (BlockHeader uncle : block.getUncleList()) {
-                BigInteger uncleReward = BLOCK_REWARD
+                BigInteger uncleReward = blockReward
                         .multiply(BigInteger.valueOf(MAGIC_REWARD_OFFSET + uncle.getNumber() - block.getNumber()))
                         .divide(BigInteger.valueOf(MAGIC_REWARD_OFFSET));
 
@@ -925,7 +963,7 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             }
         }
 
-        BigInteger minerReward = BLOCK_REWARD.add(INCLUSION_REWARD.multiply(BigInteger.valueOf(block.getUncleList().size())));
+        BigInteger minerReward = blockReward.add(inclusionReward.multiply(BigInteger.valueOf(block.getUncleList().size())));
 
         BigInteger totalFees = BigInteger.ZERO;
         for (TransactionExecutionSummary summary : summaries) {
@@ -949,9 +987,9 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
             transactionStore.put(new TransactionInfo(receipts.get(i), block.getHash(), i));
         }
 
-        // TODO (pruning)
-//        ((RepositoryImpl) repository).commitBlock(block.getHeader());
-//        repository.commit();
+        if (pruneManager != null) {
+            pruneManager.blockCommitted(block.getHeader());
+        }
 
         logger.debug("Block saved: number: {}, hash: {}, TD: {}",
                 block.getNumber(), block.getShortHash(), totalDifficulty);
@@ -1054,7 +1092,49 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
                 e.printStackTrace();
             }
         }
+    }
 
+    public void updateBlockTotDifficulties(long startFrom) {
+        // no synchronization here not to lock instance for long period
+        while(true) {
+            synchronized (this) {
+                ((IndexedBlockStore) blockStore).updateTotDifficulties(startFrom);
+
+                if (startFrom == bestBlock.getNumber()) {
+                    totalDifficulty = blockStore.getTotalDifficultyForHash(bestBlock.getHash());
+                }
+
+                if (startFrom == blockStore.getMaxNumber()) {
+                    Block bestStoredBlock = bestBlock;
+                    BigInteger maxTD = totalDifficulty;
+
+                    // traverse blocks toward max known number to get the best block
+                    for (long num = bestBlock.getNumber() + 1; num <= blockStore.getMaxNumber(); num++) {
+                        List<Block> blocks = ((IndexedBlockStore) blockStore).getBlocksByNumber(num);
+                        for (Block block : blocks) {
+                            BigInteger td = blockStore.getTotalDifficultyForHash(block.getHash());
+                            if (maxTD.compareTo(td) < 0) {
+                                maxTD = td;
+                                bestStoredBlock = block;
+                            }
+                        }
+                    }
+
+                    if (totalDifficulty.compareTo(maxTD) < 0)  {
+                        blockStore.reBranch(bestStoredBlock);
+                        bestBlock = bestStoredBlock;
+                        totalDifficulty = maxTD;
+                        repository = repository.getSnapshotTo(bestBlock.getStateRoot());
+
+                        logger.info("totDifficulties update: re-branch to block {}, totalDifficulty {}",
+                                bestBlock.getHeader().getShortDescr(), totalDifficulty);
+                    }
+
+                    break;
+                }
+                startFrom++;
+            }
+        }
     }
 
     public void setRepository(Repository repository) {
@@ -1063,14 +1143,6 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
 
     public void setProgramInvokeFactory(ProgramInvokeFactory factory) {
         this.programInvokeFactory = factory;
-    }
-
-    public void startTracking() {
-        track = repository.startTracking();
-    }
-
-    public void commitTracking() {
-        track.commit();
     }
 
     public void setExitOn(long exitOn) {
@@ -1106,139 +1178,160 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
         return pendingState;
     }
 
-    /**
-     * Returns up to limit headers found with following search parameters
-     * [Synchronized only in blockstore, not using any synchronized BlockchainImpl methods]
-     * @param identifier        Identifier of start block, by number of by hash
-     * @param skip              Number of blocks to skip between consecutive headers
-     * @param limit             Maximum number of headers in return
-     * @param reverse           Is search reverse or not
-     * @return  {@link BlockHeader}'s list or empty list if none found
-     */
     @Override
     public List<BlockHeader> getListOfHeadersStartFrom(BlockIdentifier identifier, int skip, int limit, boolean reverse) {
+        List<BlockHeader> headers = new ArrayList<>();
+        Iterator<BlockHeader> iterator = getIteratorOfHeadersStartFrom(identifier, skip, limit, reverse);
+        while (iterator.hasNext()) {
+            headers.add(iterator.next());
+        }
 
-        // Identifying block we'll move from
-        Block startBlock;
+        return headers;
+    }
+
+    @Override
+    public Iterator<BlockHeader> getIteratorOfHeadersStartFrom(BlockIdentifier identifier, int skip, int limit, boolean reverse) {
+
+        // Identifying block header we'll move from
+        BlockHeader startHeader;
         if (identifier.getHash() != null) {
-            startBlock = blockStore.getBlockByHash(identifier.getHash());
+            startHeader = findHeaderByHash(identifier.getHash());
         } else {
-            startBlock = blockStore.getChainBlockByNumber(identifier.getNumber());
+            startHeader = findHeaderByNumber(identifier.getNumber());
         }
 
         // If nothing found or provided hash is not on main chain, return empty array
-        if (startBlock == null) {
-            return emptyList();
+        if (startHeader == null) {
+            return EmptyBlockHeadersIterator.INSTANCE;
         }
+
         if (identifier.getHash() != null) {
-            Block mainChainBlock = blockStore.getChainBlockByNumber(startBlock.getNumber());
-            if (!startBlock.equals(mainChainBlock)) return emptyList();
+            BlockHeader mainChainHeader = findHeaderByNumber(startHeader.getNumber());
+            if (!startHeader.equals(mainChainHeader)) return EmptyBlockHeadersIterator.INSTANCE;
         }
 
-        List<BlockHeader> headers;
-        if (skip == 0) {
-            long bestNumber = blockStore.getBestBlock().getNumber();
-            headers = getContinuousHeaders(bestNumber, startBlock.getNumber(), limit, reverse);
-        } else {
-            headers = getGapedHeaders(startBlock, skip, limit, reverse);
-        }
-
-        return headers;
+        return new BlockHeadersIterator(startHeader, skip, limit, reverse);
     }
 
     /**
-     * Finds up to limit blocks starting from blockNumber on main chain
-     * @param bestNumber        Number of best block
-     * @param blockNumber       Number of block to start search (included in return)
-     * @param limit             Maximum number of headers in response
-     * @param reverse           Order of search
-     * @return  headers found by query or empty list if none
+     * Searches block in blockStore, if it's not found there
+     * and headerStore is defined, searches blockHeader in it.
+     * @param number block number
+     * @return  Block header
      */
-    private List<BlockHeader> getContinuousHeaders(long bestNumber, long blockNumber, int limit, boolean reverse) {
-        int qty = getQty(blockNumber, bestNumber, limit, reverse);
-
-        byte[] startHash = getStartHash(blockNumber, qty, reverse);
-
-        if (startHash == null) {
-            return emptyList();
-        }
-
-        List<BlockHeader> headers = blockStore.getListHeadersEndWith(startHash, qty);
-
-        // blocks come with falling numbers
-        if (!reverse) {
-            Collections.reverse(headers);
-        }
-
-        return headers;
-    }
-
-    /**
-     * Gets blocks from main chain with gaps between
-     * @param startBlock        Block to start from (included in return)
-     * @param skip              Number of blocks skipped between every header in return
-     * @param limit             Maximum number of headers in return
-     * @param reverse           Order of search
-     * @return  headers found by query or empty list if none
-     */
-    private List<BlockHeader> getGapedHeaders(Block startBlock, int skip, int limit, boolean reverse) {
-        List<BlockHeader> headers = new ArrayList<>();
-        headers.add(startBlock.getHeader());
-        int offset = skip + 1;
-        if (reverse) offset = -offset;
-        long currentNumber = startBlock.getNumber();
-        boolean finished = false;
-
-        while(!finished && headers.size() < limit) {
-            currentNumber += offset;
-            Block nextBlock = blockStore.getChainBlockByNumber(currentNumber);
-            if (nextBlock == null) {
-                finished = true;
-            } else {
-                headers.add(nextBlock.getHeader());
-            }
-        }
-
-        return headers;
-    }
-
-    private int getQty(long blockNumber, long bestNumber, int limit, boolean reverse) {
-        if (reverse) {
-            return blockNumber - limit + 1 < 0 ? (int) (blockNumber + 1) : limit;
-        } else {
-            if (blockNumber + limit - 1 > bestNumber) {
-                return (int) (bestNumber - blockNumber + 1);
-            } else {
-                return limit;
-            }
-        }
-    }
-
-    private byte[] getStartHash(long blockNumber, int qty, boolean reverse) {
-
-        long startNumber;
-
-        if (reverse) {
-            startNumber = blockNumber;
-        } else {
-            startNumber = blockNumber + qty - 1;
-        }
-
-        Block block = blockStore.getChainBlockByNumber(startNumber);
-
+    private BlockHeader findHeaderByNumber(long number) {
+        Block block = blockStore.getChainBlockByNumber(number);
         if (block == null) {
-            return null;
+            if (headerStore != null) {
+                return headerStore.getHeaderByNumber(number);
+            } else {
+                return null;
+            }
+        } else {
+            return block.getHeader();
         }
-
-        return block.getHash();
     }
 
     /**
-     * Returns list of block bodies by block hashes, stopping on first not found block
-     * [Synchronized only in blockstore, not using any synchronized BlockchainImpl methods]
-     * @param hashes List of hashes
-     * @return List of RLP encoded block bodies
+     * Searches block in blockStore, if it's not found there
+     * and headerStore is defined, searches blockHeader in it.
+     * @param hash block hash
+     * @return Block header
      */
+    private BlockHeader findHeaderByHash(byte[] hash) {
+        Block block = blockStore.getBlockByHash(hash);
+        if (block == null) {
+            if (headerStore != null) {
+                return headerStore.getHeaderByHash(hash);
+            } else {
+                return null;
+            }
+        } else {
+            return block.getHeader();
+        }
+    }
+
+    static class EmptyBlockHeadersIterator implements Iterator<BlockHeader> {
+        final static EmptyBlockHeadersIterator INSTANCE = new EmptyBlockHeadersIterator();
+
+        @Override
+        public boolean hasNext() {
+            return false;
+        }
+
+        @Override
+        public BlockHeader next() {
+            throw new NoSuchElementException("Nothing left");
+        }
+    }
+
+    class BlockHeadersIterator implements Iterator<BlockHeader> {
+        private final BlockHeader startHeader;
+        private final int skip;
+        private final int limit;
+        private final boolean reverse;
+        private Integer position = 0;
+        private Pair<Integer, BlockHeader> cachedNext = null;
+
+        BlockHeadersIterator(BlockHeader startHeader, int skip, int limit, boolean reverse) {
+            this.startHeader = startHeader;
+            this.skip = skip;
+            this.limit = limit;
+            this.reverse = reverse;
+        }
+
+        @Override
+        public boolean hasNext() {
+            if (startHeader == null || position >= limit) {
+                return false;
+            }
+
+            if (position == 0) {
+                // First
+                cachedNext = Pair.of(0, startHeader);
+                return true;
+            } else if (cachedNext.getLeft().equals(position)) {
+                // Already cached
+                return true;
+            } else {
+                // Main logic
+                BlockHeader prevHeader = cachedNext.getRight();
+                long nextBlockNumber;
+                if (reverse) {
+                    nextBlockNumber = prevHeader.getNumber() - 1 - skip;
+                } else {
+                    nextBlockNumber = prevHeader.getNumber() + 1 + skip;
+                }
+
+                BlockHeader nextHeader = null;
+                if (nextBlockNumber >= 0 && nextBlockNumber <= blockStore.getBestBlock().getNumber()) {
+                    nextHeader = findHeaderByNumber(nextBlockNumber);
+                }
+
+                if (nextHeader == null) {
+                    return false;
+                } else {
+                    cachedNext = Pair.of(position, nextHeader);
+                    return true;
+                }
+            }
+        }
+
+        @Override
+        public BlockHeader next() {
+            if (!hasNext()) {
+                throw new NoSuchElementException("Nothing left");
+            }
+
+            if (cachedNext == null || !cachedNext.getLeft().equals(position)) {
+                throw new ConcurrentModificationException("Concurrent modification");
+            }
+            ++position;
+
+            return cachedNext.getRight();
+        }
+    }
+
     @Override
     public List<byte[]> getListOfBodiesByHashes(List<byte[]> hashes) {
         List<byte[]> bodies = new ArrayList<>(hashes.size());
@@ -1252,10 +1345,53 @@ public class BlockchainImpl implements Blockchain, org.ethereum.facade.Blockchai
         return bodies;
     }
 
+    @Override
+    public Iterator<byte[]> getIteratorOfBodiesByHashes(List<byte[]> hashes) {
+        return new BlockBodiesIterator(hashes);
+    }
+
+    class BlockBodiesIterator implements Iterator<byte[]> {
+        private final List<byte[]> hashes;
+        private Integer position = 0;
+
+
+        BlockBodiesIterator(List<byte[]> hashes) {
+            this.hashes = new ArrayList<>(hashes);
+        }
+
+        @Override
+        public boolean hasNext() {
+            return position < hashes.size() && blockStore.getBlockByHash(hashes.get(position)) != null;
+        }
+
+        @Override
+        public byte[] next() {
+            if (!hasNext()) {
+                throw new NoSuchElementException("Nothing left");
+            }
+
+            Block block = blockStore.getBlockByHash(hashes.get(position));
+            if (block == null) {
+                throw new NoSuchElementException("Nothing left");
+            }
+            ++position;
+
+            return block.getEncodedBody();
+        }
+    }
+
     private class State {
 //        Repository savedRepo = repository;
         byte[] root = repository.getRoot();
         Block savedBest = bestBlock;
         BigInteger savedTD = totalDifficulty;
+    }
+
+    public void setPruneManager(PruneManager pruneManager) {
+        this.pruneManager = pruneManager;
+    }
+
+    public void setHeaderStore(HeaderStore headerStore) {
+        this.headerStore = headerStore;
     }
 }

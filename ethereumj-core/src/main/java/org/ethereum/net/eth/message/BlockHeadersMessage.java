@@ -1,12 +1,31 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.message;
 
 import org.ethereum.core.BlockHeader;
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
-import org.spongycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Wrapper around an Ethereum BlockHeaders message on the network
@@ -85,7 +104,7 @@ public class BlockHeadersMessage extends EthMessage {
         if (logger.isTraceEnabled()) {
             payload.append(" ");
             for (BlockHeader header : blockHeaders) {
-                payload.append(Hex.toHexString(header.getHash()).substring(0, 6)).append(" | ");
+                payload.append(toHexString(header.getHash()).substring(0, 6)).append(" | ");
             }
             if (!blockHeaders.isEmpty()) {
                 payload.delete(payload.length() - 3, payload.length());
@@ -93,11 +112,11 @@ public class BlockHeadersMessage extends EthMessage {
         } else {
             if (blockHeaders.size() > 0) {
                 payload.append("#").append(blockHeaders.get(0).getNumber()).append(" (")
-                        .append(Hex.toHexString(blockHeaders.get(0).getHash()).substring(0, 8)).append(")");
+                        .append(toHexString(blockHeaders.get(0).getHash()).substring(0, 8)).append(")");
             }
             if (blockHeaders.size() > 1) {
                 payload.append(" ... #").append(blockHeaders.get(blockHeaders.size() - 1).getNumber()).append(" (")
-                        .append(Hex.toHexString(blockHeaders.get(blockHeaders.size() - 1).getHash()).substring(0, 8)).append(")");
+                        .append(toHexString(blockHeaders.get(blockHeaders.size() - 1).getHash()).substring(0, 8)).append(")");
             }
         }
 

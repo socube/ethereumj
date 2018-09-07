@@ -1,51 +1,41 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import org.ethereum.crypto.ECKey;
-import org.ethereum.datasource.mapdb.Serializers;
-import org.ethereum.db.ByteArrayWrapper;
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
 import org.ethereum.util.Utils;
-import org.mapdb.Serializer;
 import org.spongycastle.util.encoders.Hex;
 
 import java.io.*;
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.UnknownHostException;
 import java.util.Arrays;
 
 import static org.ethereum.crypto.HashUtil.sha3;
 import static org.ethereum.util.ByteUtil.byteArrayToInt;
+import static org.ethereum.util.ByteUtil.bytesToIp;
+import static org.ethereum.util.ByteUtil.hostToBytes;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 public class Node implements Serializable {
     private static final long serialVersionUID = -4267600517925770636L;
-
-    public static final Serializer<Node> MapDBSerializer = new Serializer<Node>() {
-        @Override
-        public void serialize(DataOutput out, Node value) throws IOException {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            ObjectOutputStream oos = new ObjectOutputStream(baos);
-            oos.writeObject(value);
-            oos.close();
-            Serializers.BYTE_ARRAY_WRAPPER.serialize(out, new ByteArrayWrapper(baos.toByteArray()));
-        }
-
-        @Override
-        public Node deserialize(DataInput in, int available) throws IOException {
-            ByteArrayWrapper bytes = Serializers.BYTE_ARRAY_WRAPPER.deserialize(in, available);
-            ByteArrayInputStream bais = new ByteArrayInputStream(bytes.getData());
-            ObjectInputStream ois = new ObjectInputStream(bais);
-            try {
-                return (Node) ois.readObject();
-            } catch (ClassNotFoundException e) {
-                throw new RuntimeException(e);
-            } finally {
-                ois.close();
-            }
-        }
-    };
 
     byte[] id;
     String host;
@@ -53,10 +43,24 @@ public class Node implements Serializable {
     // discovery endpoint doesn't have real nodeId for example
     private boolean isFakeNodeId = false;
 
-    public static Node createWithoutId(String address) {
-        final ECKey generatedNodeKey = ECKey.fromPrivate(sha3(address.getBytes()));
+    /**
+     *  - create Node instance from enode if passed,
+     *  - otherwise fallback to random nodeId, if supplied with only "address:port"
+     * NOTE: validation is absent as method is not heavily used
+     */
+    public static Node instanceOf(String addressOrEnode) {
+        try {
+            URI uri = new URI(addressOrEnode);
+            if (uri.getScheme().equals("enode")) {
+                return new Node(addressOrEnode);
+            }
+        } catch (URISyntaxException e) {
+            // continue
+        }
+
+        final ECKey generatedNodeKey = ECKey.fromPrivate(sha3(addressOrEnode.getBytes()));
         final String generatedNodeId = Hex.toHexString(generatedNodeKey.getNodeId());
-        final Node node = new Node("enode://" + generatedNodeId + "@" + address);
+        final Node node = new Node("enode://" + generatedNodeId + "@" + addressOrEnode);
         node.isFakeNodeId = true;
         return node;
     }
@@ -81,12 +85,11 @@ public class Node implements Serializable {
         this.port = port;
     }
 
-
-    public Node(byte[] rlp) {
-
-        RLPList nodeRLP = RLP.decode2(rlp);
-        nodeRLP = (RLPList) nodeRLP.get(0);
-
+    /**
+     * Instantiates node from RLP list containing node data.
+     * @throws IllegalArgumentException if node id is not a valid EC point.
+     */
+    public Node(RLPList nodeRLP) {
         byte[] hostB = nodeRLP.get(0).getRLPData();
         byte[] portB = nodeRLP.get(1).getRLPData();
         byte[] idB;
@@ -97,22 +100,17 @@ public class Node implements Serializable {
             idB = nodeRLP.get(2).getRLPData();
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append(hostB[0] & 0xFF);
-        sb.append(".");
-        sb.append(hostB[1] & 0xFF);
-        sb.append(".");
-        sb.append(hostB[2] & 0xFF);
-        sb.append(".");
-        sb.append(hostB[3] & 0xFF);
-
-//        String host = new String(hostB, Charset.forName("UTF-8"));
-        String host = sb.toString();
         int port = byteArrayToInt(portB);
 
-        this.host = host;
+        this.host = bytesToIp(hostB);
         this.port = port;
-        this.id = idB;
+
+        // a tricky way to check whether given data is a valid EC point or not
+        this.id = ECKey.fromNodeId(idB).getNodeId();
+    }
+
+    public Node(byte[] rlp) {
+        this((RLPList) RLP.decode2(rlp).get(0));
     }
 
     /**
@@ -155,21 +153,35 @@ public class Node implements Serializable {
         this.port = port;
     }
 
-    public byte[] getRLP() {
-        byte[] ip;
-        try {
-            ip = InetAddress.getByName(host).getAddress();
-        } catch (UnknownHostException e) {
-            ip = new byte[4];  // fall back to invalid 0.0.0.0 address
-        }
+    public void setDiscoveryNode(boolean isDiscoveryNode) {
+        isFakeNodeId = isDiscoveryNode;
+    }
 
-        byte[] rlphost = RLP.encodeElement(ip);
+    /**
+     * Full RLP
+     * [host, udpPort, tcpPort, nodeId]
+     * @return RLP-encoded node data
+     */
+    public byte[] getRLP() {
+        byte[] rlphost = RLP.encodeElement(hostToBytes(host));
         byte[] rlpTCPPort = RLP.encodeInt(port);
         byte[] rlpUDPPort = RLP.encodeInt(port);
         byte[] rlpId = RLP.encodeElement(id);
 
-        byte[] data = RLP.encodeList(rlphost, rlpUDPPort, rlpTCPPort, rlpId);
-        return data;
+        return RLP.encodeList(rlphost, rlpUDPPort, rlpTCPPort, rlpId);
+    }
+
+    /**
+     * RLP without nodeId
+     * [host, udpPort, tcpPort]
+     * @return RLP-encoded node data
+     */
+    public byte[] getBriefRLP() {
+        byte[] rlphost = RLP.encodeElement(hostToBytes(host));
+        byte[] rlpTCPPort = RLP.encodeInt(port);
+        byte[] rlpUDPPort = RLP.encodeInt(port);
+
+        return RLP.encodeList(rlphost, rlpUDPPort, rlpTCPPort);
     }
 
     @Override
@@ -177,7 +189,7 @@ public class Node implements Serializable {
         return "Node{" +
                 " host='" + host + '\'' +
                 ", port=" + port +
-                ", id=" + Hex.toHexString(id) +
+                ", id=" + toHexString(id) +
                 '}';
     }
 

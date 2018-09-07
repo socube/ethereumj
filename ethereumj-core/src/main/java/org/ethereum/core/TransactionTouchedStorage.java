@@ -1,15 +1,32 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.collections4.keyvalue.AbstractKeyValue;
-import org.ethereum.util.Functional;
 import org.ethereum.vm.DataWord;
 
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Function;
 
 public class TransactionTouchedStorage {
 
@@ -86,7 +103,7 @@ public class TransactionTouchedStorage {
         }
     }
 
-    private Map<DataWord, DataWord> keyValues(Functional.Function<Entry, Boolean> filter) {
+    private Map<DataWord, DataWord> keyValues(Function<Entry, Boolean> filter) {
         Map<DataWord, DataWord> result = new HashMap<>();
         for (Entry entry : getEntries()) {
             if (filter == null || filter.apply(entry)) {
@@ -98,21 +115,11 @@ public class TransactionTouchedStorage {
     }
 
     public Map<DataWord, DataWord> getChanged() {
-        return keyValues(new Functional.Function<Entry, Boolean>() {
-            @Override
-            public Boolean apply(Entry entry) {
-                return entry.isChanged();
-            }
-        });
+        return keyValues(Entry::isChanged);
     }
 
     public Map<DataWord, DataWord> getReadOnly() {
-        return keyValues(new Functional.Function<Entry, Boolean>() {
-            @Override
-            public Boolean apply(Entry entry) {
-                return !entry.isChanged();
-            }
-        });
+        return keyValues(entry -> !entry.isChanged());
     }
 
     public Map<DataWord, DataWord> getAll() {

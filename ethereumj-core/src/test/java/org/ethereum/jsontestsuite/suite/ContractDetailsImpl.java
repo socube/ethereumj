@@ -1,10 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.jsontestsuite.suite;
 
 import org.ethereum.config.CommonConfig;
 import org.ethereum.config.SystemProperties;
-import org.ethereum.datasource.KeyValueDataSource;
+import org.ethereum.datasource.DbSource;
 import org.ethereum.datasource.Source;
-import org.ethereum.datasource.XorDataSource;
 import org.ethereum.db.ByteArrayWrapper;
 import org.ethereum.db.ContractDetails;
 import org.ethereum.trie.SecureTrie;
@@ -34,9 +50,7 @@ public class ContractDetailsImpl extends AbstractContractDetails {
 
     SystemProperties config = SystemProperties.getDefault();
 
-    KeyValueDataSource dataSource;
-
-    private byte[] rlpEncoded;
+    DbSource dataSource;
 
     private byte[] address = EMPTY_BYTE_ARRAY;
 
@@ -44,20 +58,10 @@ public class ContractDetailsImpl extends AbstractContractDetails {
     private SecureTrie storageTrie = new SecureTrie((byte[]) null);
 
     boolean externalStorage;
-    private KeyValueDataSource externalStorageDataSource;
+    private DbSource externalStorageDataSource;
 
     /** Tests only **/
     public ContractDetailsImpl() {
-    }
-
-    public ContractDetailsImpl(final CommonConfig commonConfig, final SystemProperties config) {
-        this.commonConfig = commonConfig;
-        this.config = config;
-    }
-
-    /** Tests only **/
-    public ContractDetailsImpl(byte[] rlpCode) {
-        decode(rlpCode);
     }
 
     private ContractDetailsImpl(byte[] address, SecureTrie storageTrie, Map<ByteArrayWrapper, byte[]> codes) {
@@ -85,7 +89,6 @@ public class ContractDetailsImpl extends AbstractContractDetails {
         }
 
         this.setDirty(true);
-        this.rlpEncoded = null;
     }
 
     @Override
@@ -95,7 +98,7 @@ public class ContractDetailsImpl extends AbstractContractDetails {
         byte[] data = storageTrie.get(key.getData());
         if (data.length > 0) {
             byte[] dataDecoded = RLP.decode2(data).get(0).getRLPData();
-            result = new DataWord(dataDecoded);
+            result = DataWord.of(dataDecoded);
         }
 
         return result;
@@ -121,7 +124,7 @@ public class ContractDetailsImpl extends AbstractContractDetails {
         Map<DataWord, DataWord> storage = new HashMap<>();
         if (keys == null) {
             for (ByteArrayWrapper keyBytes : this.keys) {
-                DataWord key = new DataWord(keyBytes);
+                DataWord key = DataWord.of(keyBytes);
                 DataWord value = get(key);
 
                 // we check if the value is not null,
@@ -157,7 +160,7 @@ public class ContractDetailsImpl extends AbstractContractDetails {
     public Set<DataWord> getStorageKeys() {
         Set<DataWord> result = new HashSet<>();
         for (ByteArrayWrapper key : keys) {
-            result.add(new DataWord(key));
+            result.add(DataWord.of(key));
         }
         return result;
     }
@@ -184,7 +187,6 @@ public class ContractDetailsImpl extends AbstractContractDetails {
     @Override
     public void setAddress(byte[] address) {
         this.address = address;
-        this.rlpEncoded = null;
     }
 
     public SecureTrie getStorageTrie() {
@@ -195,29 +197,13 @@ public class ContractDetailsImpl extends AbstractContractDetails {
     public void syncStorage() {
     }
 
-    public void setDataSource(KeyValueDataSource dataSource) {
-        this.dataSource = dataSource;
-    }
-
-    private KeyValueDataSource getExternalStorageDataSource() {
-        if (externalStorageDataSource == null) {
-            externalStorageDataSource = new XorDataSource(dataSource,
-                    sha3(("details-storage/" + toHexString(address)).getBytes()));
-        }
-        return externalStorageDataSource;
-    }
-
-    public void setExternalStorageDataSource(KeyValueDataSource dataSource) {
-        this.externalStorageDataSource = dataSource;
-    }
-
     @Override
     public ContractDetails clone() {
 
         // FIXME: clone is not working now !!!
         // FIXME: should be fixed
 
-        storageTrie.getRoot();
+//        storageTrie.getRoot();
 
         return new ContractDetailsImpl(address, null, getCodes());
     }
@@ -225,7 +211,7 @@ public class ContractDetailsImpl extends AbstractContractDetails {
     @Override
     public ContractDetails getSnapshotTo(byte[] hash){
 
-        Source<byte[], Value> cache = this.storageTrie.getCache();
+        Source<byte[], byte[]> cache = this.storageTrie.getCache();
 
         SecureTrie snapStorage = wrap(hash).equals(wrap(EMPTY_TRIE_HASH)) ?
             new SecureTrie(cache, "".getBytes()):

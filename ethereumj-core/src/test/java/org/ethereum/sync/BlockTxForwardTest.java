@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.sync;
 
 import ch.qos.logback.classic.Level;
@@ -178,7 +195,7 @@ public class BlockTxForwardTest {
          */
         EthereumListener listener = new EthereumListenerAdapter() {
             @Override
-            public void onSyncDone() {
+            public void onSyncDone(SyncState state) {
                 synced = true;
             }
 
@@ -400,14 +417,11 @@ public class BlockTxForwardTest {
 
         @Override
         public void onSyncDone() {
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        generateTransactions();
-                    } catch (Exception e) {
-                        logger.error("Error generating tx: ", e);
-                    }
+            new Thread(() -> {
+                try {
+                    generateTransactions();
+                } catch (Exception e) {
+                    logger.error("Error generating tx: ", e);
                 }
             }).start();
         }
@@ -450,11 +464,7 @@ public class BlockTxForwardTest {
     private final static int STOP_ON_BLOCK = 100;
 
     private static ScheduledExecutorService statTimer =
-            Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
-                public Thread newThread(Runnable r) {
-                    return new Thread(r, "StatTimer");
-                }
-            });
+            Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, "StatTimer"));
 
     private boolean logStats() {
         testLogger.info("---------====---------");
@@ -485,17 +495,14 @@ public class BlockTxForwardTest {
     @Test
     public void testTest() throws Exception {
 
-        statTimer.scheduleAtFixedRate(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    logStats();
-                    if (fatalErrors.get() > 0 || blocks.size() >= STOP_ON_BLOCK) {
-                        statTimer.shutdownNow();
-                    }
-                } catch (Throwable t) {
-                    testLogger.error("Unhandled exception", t);
+        statTimer.scheduleAtFixedRate(() -> {
+            try {
+                logStats();
+                if (fatalErrors.get() > 0 || blocks.size() >= STOP_ON_BLOCK) {
+                    statTimer.shutdownNow();
                 }
+            } catch (Throwable t) {
+                testLogger.error("Unhandled exception", t);
             }
         }, 0, 15, TimeUnit.SECONDS);
 
@@ -531,6 +538,7 @@ public class BlockTxForwardTest {
                                 fatalErrors.incrementAndGet();
                             };
                         }
+                        break;
                     default:
                         break;
                 }

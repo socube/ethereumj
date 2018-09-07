@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import io.netty.buffer.ByteBuf;
@@ -6,9 +23,10 @@ import io.netty.buffer.ByteBufOutputStream;
 import org.ethereum.net.swarm.Util;
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
+import org.spongycastle.crypto.BlockCipher;
 import org.spongycastle.crypto.StreamCipher;
 import org.spongycastle.crypto.digests.KeccakDigest;
-import org.spongycastle.crypto.engines.AESFastEngine;
+import org.spongycastle.crypto.engines.AESEngine;
 import org.spongycastle.crypto.modes.SICBlockCipher;
 import org.spongycastle.crypto.params.KeyParameter;
 import org.spongycastle.crypto.params.ParametersWithIV;
@@ -37,18 +55,18 @@ public class FrameCodec {
 
     public FrameCodec(EncryptionHandshake.Secrets secrets) {
         this.mac = secrets.mac;
-        int blockSize = secrets.aes.length * 8;
-        enc = new SICBlockCipher(new AESFastEngine());
-        enc.init(true, new ParametersWithIV(new KeyParameter(secrets.aes), new byte[blockSize / 8]));
-        dec = new SICBlockCipher(new AESFastEngine());
-        dec.init(false, new ParametersWithIV(new KeyParameter(secrets.aes), new byte[blockSize / 8]));
+        BlockCipher cipher;
+        enc = new SICBlockCipher(cipher = new AESEngine());
+        enc.init(true, new ParametersWithIV(new KeyParameter(secrets.aes), new byte[cipher.getBlockSize()]));
+        dec = new SICBlockCipher(cipher = new AESEngine());
+        dec.init(false, new ParametersWithIV(new KeyParameter(secrets.aes), new byte[cipher.getBlockSize()]));
         egressMac = secrets.egressMac;
         ingressMac = secrets.ingressMac;
     }
 
-    private AESFastEngine makeMacCipher() {
+    private AESEngine makeMacCipher() {
         // Stateless AES encryption
-        AESFastEngine macc = new AESFastEngine();
+        AESEngine macc = new AESEngine();
         macc.init(true, new KeyParameter(mac));
         return macc;
     }
@@ -159,7 +177,7 @@ public class FrameCodec {
             updateMac(ingressMac, headBuffer, 0, headBuffer, 16, false);
 
             dec.processBytes(headBuffer, 0, 16, headBuffer, 0);
-            totalBodySize = headBuffer[0];
+            totalBodySize = headBuffer[0] & 0xFF;
             totalBodySize = (totalBodySize << 8) + (headBuffer[1] & 0xFF);
             totalBodySize = (totalBodySize << 8) + (headBuffer[2] & 0xFF);
 
@@ -191,7 +209,7 @@ public class FrameCodec {
         ingressMac.update(buffer, 0, frameSize);
         dec.processBytes(buffer, 0, frameSize, buffer, 0);
         int pos = 0;
-        long type = RLP.decodeInt(buffer, pos); // FIXME long
+        long type = RLP.decodeLong(buffer, pos);
         pos = RLP.getNextElementIndex(buffer, pos);
         InputStream payload = new ByteArrayInputStream(buffer, pos, totalBodySize - pos);
         int size = totalBodySize - pos;

@@ -1,12 +1,30 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.message;
 
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPList;
 import org.ethereum.util.Utils;
-import org.spongycastle.util.encoders.Hex;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * Wrapper around an Ethereum GetReceipts message on the network
@@ -29,7 +47,8 @@ public class GetReceiptsMessage extends EthMessage {
         parsed = true;
     }
 
-    private void parse() {
+    private synchronized void parse() {
+        if (parsed) return;
         RLPList paramsList = (RLPList) RLP.decode2(encoded).get(0);
 
         this.blockHashes = new ArrayList<>();
@@ -63,7 +82,7 @@ public class GetReceiptsMessage extends EthMessage {
     }
 
     public List<byte[]> getBlockHashes() {
-        if (!parsed) parse();
+        parse();
         return blockHashes;
     }
 
@@ -73,7 +92,7 @@ public class GetReceiptsMessage extends EthMessage {
     }
 
     public String toString() {
-        if (!parsed) parse();
+        parse();
 
         StringBuilder payload = new StringBuilder();
 
@@ -81,7 +100,7 @@ public class GetReceiptsMessage extends EthMessage {
 
         if (logger.isDebugEnabled()) {
             for (byte[] hash : blockHashes) {
-                payload.append(Hex.toHexString(hash).substring(0, 6)).append(" | ");
+                payload.append(toHexString(hash).substring(0, 6)).append(" | ");
             }
             if (!blockHashes.isEmpty()) {
                 payload.delete(payload.length() - 3, payload.length());

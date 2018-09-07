@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.samples;
 
 import org.ethereum.core.Block;
@@ -9,13 +26,13 @@ import org.ethereum.db.ByteArrayWrapper;
 import org.ethereum.facade.EthereumFactory;
 import org.ethereum.listener.EthereumListenerAdapter;
 import org.ethereum.util.ByteUtil;
-import org.spongycastle.pqc.math.linearalgebra.ByteUtils;
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 
 import java.math.BigInteger;
 import java.util.*;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * PendingState is the ability to track the changes made by transaction immediately and not wait for
@@ -63,16 +80,13 @@ public class PendingStateSample extends TestNetSample {
             }
         });
 
-        new Thread("PendingStateSampleThread") {
-            @Override
-            public void run() {
-                try {
-                    sendTransactions();
-                } catch (Exception e) {
-                    logger.error("Error while sending transactions", e);
-                }
+        new Thread(() -> {
+            try {
+                sendTransactions();
+            } catch (Exception e) {
+                logger.error("Error while sending transactions", e);
             }
-        }.start();
+        }, "PendingStateSampleThread").start();
     }
 
     /**
@@ -93,8 +107,9 @@ public class PendingStateSample extends TestNetSample {
                         ByteUtil.longToBytesNoLeadZeroes(ethereum.getGasPrice()),
                         ByteUtil.longToBytesNoLeadZeroes(1_000_000),
                         receiverAddress,
-                        ByteUtil.longToBytesNoLeadZeroes(weisToSend), new byte[0]);
-                tx.sign(senderPrivateKey);
+                        ByteUtil.longToBytesNoLeadZeroes(weisToSend), new byte[0],
+                        ethereum.getChainIdForNextBlock());
+                tx.sign(ECKey.fromPrivate(receiverAddress));
                 logger.info("<=== Sending transaction: " + tx);
                 ethereum.submitTransaction(tx);
 
@@ -123,7 +138,7 @@ public class PendingStateSample extends TestNetSample {
         if (Arrays.equals(tx.getSender(), senderAddress)) {
             BigInteger receiverBalance = ethereum.getRepository().getBalance(receiverAddress);
             BigInteger receiverBalancePending = pendingState.getRepository().getBalance(receiverAddress);
-            logger.info(" + New pending transaction 0x" + Hex.toHexString(tx.getHash()).substring(0, 8));
+            logger.info(" + New pending transaction 0x" + toHexString(tx.getHash()).substring(0, 8));
 
             pendingTxs.put(new ByteArrayWrapper(tx.getHash()), tx);
 
@@ -142,7 +157,7 @@ public class PendingStateSample extends TestNetSample {
             ByteArrayWrapper txHash = new ByteArrayWrapper(tx.getHash());
             Transaction ptx = pendingTxs.get(txHash);
             if (ptx != null) {
-                logger.info(" - Pending transaction cleared 0x" + Hex.toHexString(tx.getHash()).substring(0, 8) +
+                logger.info(" - Pending transaction cleared 0x" + toHexString(tx.getHash()).substring(0, 8) +
                         " in block " + block.getShortDescr());
 
                 pendingTxs.remove(txHash);

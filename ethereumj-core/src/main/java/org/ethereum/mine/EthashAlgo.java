@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.mine;
 
 import org.apache.commons.lang3.tuple.Pair;
@@ -189,9 +206,13 @@ public class EthashAlgo {
     }
 
     public long mine(long fullSize, int[] dataset, byte[] blockHeaderTruncHash, long difficulty) {
+        return mine(fullSize, dataset, blockHeaderTruncHash, difficulty, new Random().nextLong());
+    }
+
+    public long mine(long fullSize, int[] dataset, byte[] blockHeaderTruncHash, long difficulty, long startNonce) {
+        long nonce = startNonce;
         BigInteger target = valueOf(2).pow(256).divide(valueOf(difficulty));
-        long nonce = new Random().nextLong();
-        while(!Thread.currentThread().isInterrupted()) {
+        while (!Thread.currentThread().isInterrupted()) {
             nonce++;
             Pair<byte[], byte[]> pair = hashimotoFull(fullSize, dataset, blockHeaderTruncHash, longToBytes(nonce));
             BigInteger h = new BigInteger(1, pair.getRight() /* ?? */);
@@ -205,8 +226,12 @@ public class EthashAlgo {
      * regular {@link #mine} method
      */
     public long mineLight(long fullSize, final int[] cache, byte[] blockHeaderTruncHash, long difficulty) {
+        return mineLight(fullSize, cache, blockHeaderTruncHash, difficulty, new Random().nextLong());
+    }
+
+    public long mineLight(long fullSize, final int[] cache, byte[] blockHeaderTruncHash, long difficulty, long startNonce) {
+        long nonce = startNonce;
         BigInteger target = valueOf(2).pow(256).divide(valueOf(difficulty));
-        long nonce = new Random().nextLong();
         while(!Thread.currentThread().isInterrupted()) {
             nonce++;
             Pair<byte[], byte[]> pair = hashimotoLight(fullSize, cache, blockHeaderTruncHash, longToBytes(nonce));

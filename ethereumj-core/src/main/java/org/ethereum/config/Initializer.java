@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.config;
 
 import org.ethereum.net.eth.EthVersion;
@@ -5,6 +22,7 @@ import org.ethereum.net.shh.ShhHandler;
 import org.ethereum.net.swarm.bzz.BzzHandler;
 import org.ethereum.util.BuildInfo;
 import org.ethereum.util.FileUtil;
+import org.ethereum.util.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
@@ -44,11 +62,18 @@ class Initializer implements BeanPostProcessor {
         logger.info("capability shh version: [{}]", ShhHandler.VERSION);
         logger.info("capability bzz version: [{}]", BzzHandler.VERSION);
 
+        // forcing loading blockchain config
+        config.getBlockchainConfig();
+
         // forcing loading genesis to fail fast in case of error
         config.getGenesis();
 
         // forcing reading private key or generating it in database directory
         config.nodeId();
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Blockchain config {}", config.getBlockchainConfig().toString());
+        }
     }
 
     @Override
@@ -77,7 +102,15 @@ class Initializer implements BeanPostProcessor {
         }
 
         public void process(SystemProperties config) {
-            if (config.databaseReset()){
+
+            if (config.getKeyValueDataSource().equals("leveldb"))
+                Utils.showWarn(
+                        "Deprecated database engine detected",
+                        "'leveldb' support will be removed in one of the next releases",
+                        "thus it is strongly recommended to stick with 'rocksdb' instead"
+                );
+
+            if (config.databaseReset() && config.databaseResetBlock() == 0){
                 FileUtil.recursiveDelete(config.databaseDir());
                 putDatabaseVersion(config, config.databaseVersion());
                 logger.info("Database reset done");
@@ -105,10 +138,11 @@ class Initializer implements BeanPostProcessor {
                 } else {
                     logger.warn("Detected incompatible database version. Detected:{}, required:{}", actualVersion, expectedVersion);
                     if (behavior == Behavior.EXIT) {
-                        System.err.println("Please remove database directory manually or set `database.incompatibleDatabaseBehavior` to `RESET`");
-                        System.err.println("Database directory location is " + config.databaseDir());
-                        throw new Error("Incompatible database version " + actualVersion + ". Please remove database " +
-                                "directory manually or set `database.incompatibleDatabaseBehavior` to `RESET`");
+                        Utils.showErrorAndExit(
+                                "Incompatible database version " + actualVersion,
+                                "Please remove database directory manually or set `database.incompatibleDatabaseBehavior` to `RESET`",
+                                "Database directory location is " + config.databaseDir()
+                        );
                     } else if (behavior == Behavior.RESET) {
                         boolean res = FileUtil.recursiveDelete(config.databaseDir());
                         if (!res) {

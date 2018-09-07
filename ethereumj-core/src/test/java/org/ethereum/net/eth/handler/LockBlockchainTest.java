@@ -1,5 +1,23 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.handler;
 
+import org.ethereum.config.CommonConfig;
 import org.ethereum.config.NoAutoscan;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.Block;
@@ -12,9 +30,11 @@ import org.ethereum.listener.CompositeEthereumListener;
 import org.ethereum.net.eth.message.EthMessage;
 import org.ethereum.net.eth.message.GetBlockBodiesMessage;
 import org.ethereum.net.eth.message.GetBlockHeadersMessage;
+import org.ethereum.sync.SyncManager;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
+import org.mockito.Mockito;
 import org.spongycastle.util.encoders.Hex;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,7 +50,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Testing whether Eth handler {@link Eth62} is blocking {@link BlockchainImpl}
  */
-@Ignore
 public class LockBlockchainTest {
 
     private final AtomicBoolean result = new AtomicBoolean();
@@ -42,7 +61,8 @@ public class LockBlockchainTest {
     public LockBlockchainTest() {
 
         SysPropConfig1.props.overrideParams(
-                "peer.listen.port", "30334",
+                "peer.discovery.enabled", "false",
+                "peer.listen.port", "37777",
                 "peer.privateKey", "3ec771c31cac8c0dba77a69e503765701d3c2bb62435888d4ffa38fed60c445c",
                 "genesis", "genesis-light.json",
                 "database.dir", "testDB-1");
@@ -77,10 +97,14 @@ public class LockBlockchainTest {
             }
         };
 
-        SysPropConfig1.testHandler = new Eth62(SysPropConfig1.props, blockchain, new CompositeEthereumListener()) {
+        SysPropConfig1.testHandler = new Eth62(SysPropConfig1.props, blockchain, blockStoreDummy,
+                new CompositeEthereumListener()) {
+            {
+                this.blockstore = blockStoreDummy;
+                this.syncManager = Mockito.mock(SyncManager.class);
+            }
             @Override
             public synchronized void sendStatus() {
-                this.blockstore = blockStoreDummy;
                 super.sendStatus();
             }
 
@@ -119,22 +143,16 @@ public class LockBlockchainTest {
     @Test
     public synchronized void testHeadersWithoutSkip() throws FileNotFoundException, InterruptedException {
         ExecutorService executor1 = Executors.newSingleThreadExecutor();
-        executor1.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 blockchain.isBlockExist(null);
-                             }
-                         }
+        executor1.submit(() -> {
+            blockchain.isBlockExist(null);
+        }
         );
         this.wait(DELAY);
         ExecutorService executor2 = Executors.newSingleThreadExecutor();
-        executor2.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 GetBlockHeadersMessage msg = new GetBlockHeadersMessage(1L, new byte[0], 10, 0, false);
-                                 SysPropConfig1.testHandler.processGetBlockHeaders(msg);
-                             }
-                         }
+        executor2.submit(() -> {
+            GetBlockHeadersMessage msg = new GetBlockHeadersMessage(1L, new byte[0], 10, 0, false);
+            SysPropConfig1.testHandler.processGetBlockHeaders(msg);
+        }
         );
         this.wait(DELAY);
         assert result.get();
@@ -143,22 +161,16 @@ public class LockBlockchainTest {
     @Test
     public synchronized void testHeadersWithSkip() throws FileNotFoundException, InterruptedException {
         ExecutorService executor1 = Executors.newSingleThreadExecutor();
-        executor1.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 blockchain.isBlockExist(null);
-                             }
-                         }
+        executor1.submit(() -> {
+            blockchain.isBlockExist(null);
+        }
         );
         this.wait(DELAY);
         ExecutorService executor2 = Executors.newSingleThreadExecutor();
-        executor2.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 GetBlockHeadersMessage msg = new GetBlockHeadersMessage(1L, new byte[0], 10, 5, false);
-                                 SysPropConfig1.testHandler.processGetBlockHeaders(msg);
-                             }
-                         }
+        executor2.submit(() -> {
+            GetBlockHeadersMessage msg = new GetBlockHeadersMessage(1L, new byte[0], 10, 5, false);
+            SysPropConfig1.testHandler.processGetBlockHeaders(msg);
+        }
         );
         this.wait(DELAY);
         assert result.get();
@@ -167,25 +179,19 @@ public class LockBlockchainTest {
     @Test
     public synchronized void testBodies() throws FileNotFoundException, InterruptedException {
         ExecutorService executor1 = Executors.newSingleThreadExecutor();
-        executor1.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 blockchain.isBlockExist(null);
-                             }
-                         }
+        executor1.submit(() -> {
+            blockchain.isBlockExist(null);
+        }
         );
         this.wait(DELAY);
         ExecutorService executor2 = Executors.newSingleThreadExecutor();
-        executor2.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 List<byte[]> hashes = new ArrayList<>();
-                                 hashes.add(new byte[] {1, 2, 3});
-                                 hashes.add(new byte[] {4, 5, 6});
-                                 GetBlockBodiesMessage msg = new GetBlockBodiesMessage(hashes);
-                                 SysPropConfig1.testHandler.processGetBlockBodies(msg);
-                             }
-                         }
+        executor2.submit(() -> {
+            List<byte[]> hashes = new ArrayList<>();
+            hashes.add(new byte[] {1, 2, 3});
+            hashes.add(new byte[] {4, 5, 6});
+            GetBlockBodiesMessage msg = new GetBlockBodiesMessage(hashes);
+            SysPropConfig1.testHandler.processGetBlockBodies(msg);
+        }
         );
         this.wait(DELAY);
         assert result.get();
@@ -194,21 +200,19 @@ public class LockBlockchainTest {
     @Test
     public synchronized void testStatus() throws FileNotFoundException, InterruptedException {
         ExecutorService executor1 = Executors.newSingleThreadExecutor();
-        executor1.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 blockchain.isBlockExist(null);
-                             }
-                         }
+        executor1.submit(() -> {
+            blockchain.isBlockExist(null);
+        }
         );
         this.wait(DELAY);
         ExecutorService executor2 = Executors.newSingleThreadExecutor();
-        executor2.submit(new Runnable() {
-                             @Override
-                             public void run() {
-                                 SysPropConfig1.testHandler.sendStatus();
-                             }
-                         }
+        executor2.submit(() -> {
+            try {
+                SysPropConfig1.testHandler.sendStatus();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
         );
         this.wait(DELAY);
         assert result.get();

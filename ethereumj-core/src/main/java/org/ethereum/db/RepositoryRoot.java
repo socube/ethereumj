@@ -1,12 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.db;
 
 import org.ethereum.core.AccountState;
 import org.ethereum.core.Repository;
 import org.ethereum.datasource.*;
-import org.ethereum.trie.SecureTrie;
-import org.ethereum.trie.Trie;
-import org.ethereum.trie.TrieImpl;
-import org.ethereum.util.Value;
+import org.ethereum.trie.*;
 import org.ethereum.vm.DataWord;
 
 /**
@@ -14,13 +28,11 @@ import org.ethereum.vm.DataWord;
  */
 public class RepositoryRoot extends RepositoryImpl {
 
-    private static class StorageCache extends CachedSourceImpl<DataWord, DataWord> {
-        byte[] accountAddress;
+    private static class StorageCache extends ReadWriteCache<DataWord, DataWord> {
         Trie<byte[]> trie;
 
-        public StorageCache(byte[] accountAddress, Trie<byte[]> trie) {
-            super(new SourceCodec<>(trie, new WordSerializer(), new TrieWordSerializer()));
-            this.accountAddress = accountAddress;
+        public StorageCache(Trie<byte[]> trie) {
+            super(new SourceCodec<>(trie, Serializers.StorageKeySerializer, Serializers.StorageValueSerializer), WriteCache.CacheType.SIMPLE);
             this.trie = trie;
         }
     }
@@ -30,24 +42,27 @@ public class RepositoryRoot extends RepositoryImpl {
             super(null);
         }
         @Override
-        protected StorageCache create(byte[] key, StorageCache srcCache) {
+        protected synchronized StorageCache create(byte[] key, StorageCache srcCache) {
             AccountState accountState = accountStateCache.get(key);
-            TrieImpl storageTrie = createTrie(trieCache, accountState == null ? null : accountState.getStateRoot());
-            return new StorageCache(key, storageTrie);
+            Serializer<byte[], byte[]> keyCompositor = new NodeKeyCompositor(key);
+            Source<byte[], byte[]> composingSrc = new SourceCodec.KeyOnly<>(trieCache, keyCompositor);
+            TrieImpl storageTrie = createTrie(composingSrc, accountState == null ? null : accountState.getStateRoot());
+            return new StorageCache(storageTrie);
         }
 
         @Override
-        protected boolean flushChild(StorageCache childCache) {
-            if (super.flushChild(childCache)) {
-                AccountState storageOwnerAcct = accountStateCache.get(childCache.accountAddress);
-                if (storageOwnerAcct != null) {
+        protected synchronized boolean flushChild(byte[] key, StorageCache childCache) {
+            if (super.flushChild(key, childCache)) {
+                if (childCache != null) {
+                    AccountState storageOwnerAcct = accountStateCache.get(key);
                     // need to update account storage root
+                    childCache.trie.flush();
                     byte[] rootHash = childCache.trie.getRootHash();
-                    accountStateCache.put(childCache.accountAddress, storageOwnerAcct.withStateRoot(rootHash));
+                    accountStateCache.put(key, storageOwnerAcct.withStateRoot(rootHash));
                     return true;
                 } else {
                     // account was deleted
-                    return false;
+                    return true;
                 }
             } else {
                 // no storage changes
@@ -57,50 +72,60 @@ public class RepositoryRoot extends RepositoryImpl {
     }
 
     private Source<byte[], byte[]> stateDS;
-    private CachedSource.BytesKey<byte[]> snapshotCache;
-    private CachedSource.BytesKey<Value> trieCache;
-    private TrieImpl stateTrie;
+    private CachedSource.BytesKey<byte[]> trieCache;
+    private Trie<byte[]> stateTrie;
 
     public RepositoryRoot(Source<byte[], byte[]> stateDS) {
         this(stateDS, null);
     }
 
+    /**
+     * Building the following structure for snapshot Repository:
+     *
+     * stateDS --> trieCache --> stateTrie --> accountStateCodec --> accountStateCache
+     *  \                 \
+     *   \                 \-->>> storageKeyCompositor --> contractStorageTrie --> storageCodec --> storageCache
+     *    \--> codeCache
+     *
+     *
+     * @param stateDS
+     * @param root
+     */
     public RepositoryRoot(final Source<byte[], byte[]> stateDS, byte[] root) {
         this.stateDS = stateDS;
-        snapshotCache = new CachedSourceImpl.BytesKey<>(stateDS);
 
-        SourceCodec.BytesKey<Value, byte[]> trieCacheCodec = new SourceCodec.BytesKey<>(snapshotCache, new TrieCacheSerializer());
-        trieCache = new CachedSourceImpl.BytesKey<Value>(trieCacheCodec) {{
-                withCacheReads(false);
-                withNoDelete(true);
-            }};
-        stateTrie = createTrie(trieCache, root);
+        trieCache = new WriteCache.BytesKey<>(stateDS, WriteCache.CacheType.COUNTING);
+        stateTrie = new SecureTrie(trieCache, root);
 
-        SourceCodec.BytesKey<AccountState, byte[]> accountStateCodec = new SourceCodec.BytesKey<>(stateTrie, new AccountStateSerializer());
-        final CachedSource.BytesKey<AccountState> accountStateCache = new CachedSourceImpl.BytesKey<>(accountStateCodec);
-        CachedSource.BytesKey<byte[]> codeCache = new CachedSourceImpl.BytesKey<>(snapshotCache);
+        SourceCodec.BytesKey<AccountState, byte[]> accountStateCodec = new SourceCodec.BytesKey<>(stateTrie, Serializers.AccountStateSerializer);
+        final ReadWriteCache.BytesKey<AccountState> accountStateCache = new ReadWriteCache.BytesKey<>(accountStateCodec, WriteCache.CacheType.SIMPLE);
 
         final MultiCache<StorageCache> storageCache = new MultiStorageCache();
+
+        // counting as there can be 2 contracts with the same code, 1 can suicide
+        Source<byte[], byte[]> codeCache = new WriteCache.BytesKey<>(stateDS, WriteCache.CacheType.COUNTING);
 
         init(accountStateCache, codeCache, storageCache);
     }
 
     @Override
-    public void commit() {
+    public synchronized void commit() {
         super.commit();
 
+        stateTrie.flush();
         trieCache.flush();
-        snapshotCache.flush();
     }
 
     @Override
-    public byte[] getRoot() {
-        super.commit();
+    public synchronized byte[] getRoot() {
+        storageCache.flush();
+        accountStateCache.flush();
+
         return stateTrie.getRootHash();
     }
 
     @Override
-    public void flush() {
+    public synchronized void flush() {
         commit();
     }
 
@@ -110,21 +135,17 @@ public class RepositoryRoot extends RepositoryImpl {
     }
 
     @Override
-    public String dumpStateTrie() {
-        return stateTrie.getTrieDump();
+    public synchronized String dumpStateTrie() {
+        return ((TrieImpl) stateTrie).dumpTrie();
     }
 
     @Override
-    public void syncToRoot(byte[] root) {
+    public synchronized void syncToRoot(byte[] root) {
         stateTrie.setRoot(root);
     }
 
-    @Override
-    public Value getState(byte[] stateRoot) {
-        return trieCache.get(stateRoot);
-    }
-
-    protected TrieImpl createTrie(CachedSource.BytesKey<Value> trieCache, byte[] root) {
+    protected TrieImpl createTrie(Source<byte[], byte[]> trieCache, byte[] root) {
         return new SecureTrie(trieCache, root);
     }
+
 }

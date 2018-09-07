@@ -1,5 +1,24 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.jsontestsuite.suite.runners;
 
+import org.ethereum.config.SystemProperties;
+import org.ethereum.config.net.MainNetConfig;
 import org.ethereum.core.*;
 import org.ethereum.db.BlockStoreDummy;
 import org.ethereum.jsontestsuite.suite.Env;
@@ -28,7 +47,12 @@ public class StateTestRunner {
     private static Logger logger = LoggerFactory.getLogger("TCK-Test");
 
     public static List<String> run(StateTestCase stateTestCase2) {
-        return new StateTestRunner(stateTestCase2).runImpl();
+        try {
+            SystemProperties.getDefault().setBlockchainConfig(stateTestCase2.getConfig());
+            return new StateTestRunner(stateTestCase2).runImpl();
+        } finally {
+            SystemProperties.getDefault().setBlockchainConfig(MainNetConfig.INSTANCE);
+        }
     }
 
     protected StateTestCase stateTestCase;
@@ -56,7 +80,7 @@ public class StateTestRunner {
             executor.go();
             executor.finalization();
         } catch (StackOverflowError soe){
-            logger.error(" !!! StackOverflowError: update your java run command with -Xss32M !!!");
+            logger.error(" !!! StackOverflowError: update your java run command with -Xss4M !!!");
             System.exit(-1);
         }
 
@@ -83,29 +107,37 @@ public class StateTestRunner {
 
         blockchain.setBestBlock(block);
         blockchain.setProgramInvokeFactory(invokeFactory);
-        blockchain.startTracking();
 
         ProgramResult programResult = executeTransaction(transaction);
 
         repository.commit();
 
         List<LogInfo> origLogs = programResult.getLogInfoList();
-        List<LogInfo> postLogs = LogBuilder.build(stateTestCase.getLogs());
-
-        List<String> logsResult = LogsValidator.valid(origLogs, postLogs);
-
-        Repository postRepository = RepositoryBuilder.build(stateTestCase.getPost());
-        List<String> repoResults = RepositoryValidator.valid(repository, postRepository);
-
-        logger.info("--------- POST Validation---------");
-        List<String> outputResults =
-                OutputValidator.valid(Hex.toHexString(programResult.getHReturn()), stateTestCase.getOut());
+        List<String> logsResult = stateTestCase.getLogs().compareToReal(origLogs);
 
         List<String> results = new ArrayList<>();
-        results.addAll(repoResults);
-        results.addAll(logsResult);
-        results.addAll(outputResults);
 
+        if (stateTestCase.getPost() != null) {
+            Repository postRepository = RepositoryBuilder.build(stateTestCase.getPost());
+            List<String> repoResults = RepositoryValidator.valid(repository, postRepository);
+
+            results.addAll(repoResults);
+        } else if (stateTestCase.getPostStateRoot() != null) {
+            results.addAll(RepositoryValidator.validRoot(
+                    Hex.toHexString(repository.getRoot()),
+                    stateTestCase.getPostStateRoot()
+            ));
+        }
+
+        if (stateTestCase.getOut() != null) {
+            List<String> outputResults =
+                    OutputValidator.valid(Hex.toHexString(programResult.getHReturn()), stateTestCase.getOut());
+            results.addAll(outputResults);
+        }
+
+        results.addAll(logsResult);
+
+        logger.info("--------- POST Validation---------");
         for (String result : results) {
             logger.error(result);
         }

@@ -1,9 +1,28 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.manager;
 
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.*;
 import org.ethereum.db.BlockStore;
-import org.ethereum.db.ByteArrayWrapper;
+import org.ethereum.db.DbFlushManager;
+import org.ethereum.db.HeaderStore;
+import org.ethereum.db.migrate.MigrateHeaderSourceTotalDiff;
 import org.ethereum.listener.CompositeEthereumListener;
 import org.ethereum.listener.EthereumListener;
 import org.ethereum.net.client.PeerClient;
@@ -13,6 +32,7 @@ import org.ethereum.sync.SyncManager;
 import org.ethereum.net.rlpx.discover.NodeManager;
 import org.ethereum.net.server.ChannelManager;
 import org.ethereum.sync.SyncPool;
+import org.ethereum.util.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.spongycastle.util.encoders.Hex;
@@ -25,9 +45,9 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.concurrent.CountDownLatch;
 
 import static org.ethereum.crypto.HashUtil.EMPTY_TRIE_HASH;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * WorldManager is a singleton containing references to different parts of the system.
@@ -56,9 +76,6 @@ public class WorldManager {
     private SyncManager syncManager;
 
     @Autowired
-    private FastSyncManager fastSyncManager;
-
-    @Autowired
     private SyncPool pool;
 
     @Autowired
@@ -69,6 +86,9 @@ public class WorldManager {
 
     @Autowired
     private EventDispatchThread eventDispatchThread;
+
+    @Autowired
+    private DbFlushManager dbFlushManager;
 
     @Autowired
     private ApplicationContext ctx;
@@ -97,6 +117,7 @@ public class WorldManager {
 
     @PostConstruct
     private void init() {
+        fastSyncDbJobs();
         syncManager.init(channelManager, pool);
     }
 
@@ -114,8 +135,8 @@ public class WorldManager {
     }
 
     public void initSyncing() {
+        config.setSyncEnabled(true);
         syncManager.init(channelManager, pool);
-        pool.init(channelManager);
     }
 
     public ChannelManager getChannelManager() {
@@ -148,27 +169,24 @@ public class WorldManager {
 
     public void loadBlockchain() {
 
-        if (!config.databaseReset())
+        if (!config.databaseReset() || config.databaseResetBlock() != 0)
             blockStore.load();
 
-        Block bestBlock = blockStore.getBestBlock();
-        if (bestBlock == null) {
+        if (blockStore.getBestBlock() == null) {
             logger.info("DB is empty - adding Genesis");
 
-            Genesis genesis = (Genesis)Genesis.getInstance(config);
-            for (ByteArrayWrapper key : genesis.getPremine().keySet()) {
-                repository.createAccount(key.getData());
-                repository.addBalance(key.getData(), genesis.getPremine().get(key).getBalance());
-            }
+            Genesis genesis = Genesis.getInstance(config);
+            Genesis.populateRepository(repository, genesis);
+
 //            repository.commitBlock(genesis.getHeader());
             repository.commit();
 
-            blockStore.saveBlock(Genesis.getInstance(config), Genesis.getInstance(config).getCumulativeDifficulty(), true);
+            blockStore.saveBlock(Genesis.getInstance(config), Genesis.getInstance(config).getDifficultyBI(), true);
 
             blockchain.setBestBlock(Genesis.getInstance(config));
-            blockchain.setTotalDifficulty(Genesis.getInstance(config).getCumulativeDifficulty());
+            blockchain.setTotalDifficulty(Genesis.getInstance(config).getDifficultyBI());
 
-            listener.onBlock(new BlockSummary(Genesis.getInstance(config), new HashMap<byte[], BigInteger>(), new ArrayList<TransactionReceipt>(), new ArrayList<TransactionExecutionSummary>()));
+            listener.onBlock(new BlockSummary(Genesis.getInstance(config), new HashMap<byte[], BigInteger>(), new ArrayList<TransactionReceipt>(), new ArrayList<TransactionExecutionSummary>()), true);
 //            repository.dumpState(Genesis.getInstance(config), 0, 0, null);
 
             logger.info("Genesis block loaded");
@@ -176,19 +194,35 @@ public class WorldManager {
 
             if (!config.databaseReset() &&
                     !Arrays.equals(blockchain.getBlockByNumber(0).getHash(), config.getGenesis().getHash())) {
-                logger.error("*** DB is incorrect, 0 block in DB doesn't match genesis");
-                throw new RuntimeException("DB doesn't match genesis");
+                // fatal exit
+                Utils.showErrorAndExit("*** DB is incorrect, 0 block in DB doesn't match genesis");
+            }
+
+            Block bestBlock = blockStore.getBestBlock();
+            if (config.databaseReset() && config.databaseResetBlock() > 0) {
+                if (config.databaseResetBlock() > bestBlock.getNumber()) {
+                    logger.error("*** Can't reset to block [{}] since block store is at block [{}].", config.databaseResetBlock(), bestBlock);
+                    throw new RuntimeException("Reset block ahead of block store.");
+                }
+                bestBlock = blockStore.getChainBlockByNumber(config.databaseResetBlock());
+
+                Repository snapshot = repository.getSnapshotTo(bestBlock.getStateRoot());
+                if (false) { // TODO: some way to tell if the snapshot hasn't been pruned
+                    logger.error("*** Could not reset database to block [{}] with stateRoot [{}], since state information is " +
+                            "unavailable.  It might have been pruned from the database.");
+                    throw new RuntimeException("State unavailable for reset block.");
+                }
             }
 
             blockchain.setBestBlock(bestBlock);
 
-            BigInteger totalDifficulty = blockStore.getTotalDifficulty();
+            BigInteger totalDifficulty = blockStore.getTotalDifficultyForHash(bestBlock.getHash());
             blockchain.setTotalDifficulty(totalDifficulty);
 
             logger.info("*** Loaded up to block [{}] totalDifficulty [{}] with stateRoot [{}]",
                     blockchain.getBestBlock().getNumber(),
                     blockchain.getTotalDifficulty().toString(),
-                    Hex.toHexString(blockchain.getBestBlock().getStateRoot()));
+                    toHexString(blockchain.getBestBlock().getStateRoot()));
         }
 
         if (config.rootHashStart() != null) {
@@ -217,6 +251,26 @@ public class WorldManager {
 */
     }
 
+    /**
+     * After introducing skipHistory in FastSync this method
+     * adds additional header storage to Blockchain
+     * as Blockstore is incomplete in this mode
+     */
+    private void fastSyncDbJobs() {
+        // checking if fast sync ran sometime ago with "skipHistory flag"
+        if (blockStore.getBestBlock().getNumber() > 0 &&
+                blockStore.getChainBlockByNumber(1) == null) {
+            FastSyncManager fastSyncManager = ctx.getBean(FastSyncManager.class);
+            if (fastSyncManager.isInProgress()) {
+                return;
+            }
+            logger.info("DB is filled using Fast Sync with skipHistory, adopting headerStore");
+            ((BlockchainImpl) blockchain).setHeaderStore(ctx.getBean(HeaderStore.class));
+        }
+        MigrateHeaderSourceTotalDiff tempMigration = new MigrateHeaderSourceTotalDiff(ctx, blockStore, blockchain, config);
+        tempMigration.run();
+    }
+
     public void close() {
         logger.info("close: stopping peer discovery ...");
         stopPeerDiscovery();
@@ -232,6 +286,8 @@ public class WorldManager {
         blockchain.close();
         logger.info("close: closing main repository ...");
         repository.close();
+        logger.info("close: database flush manager ...");
+        dbFlushManager.close();
     }
 
 }

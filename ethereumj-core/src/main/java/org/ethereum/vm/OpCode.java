@@ -1,5 +1,24 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm;
 
+import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -113,6 +132,18 @@ public enum OpCode {
      * (0x1a) Retrieve single byte from word
      */
     BYTE(0x1a, 2, 1, VeryLowTier),
+    /**
+     * (0x1b) Shift left
+     */
+    SHL(0x1b, 2, 1, VeryLowTier),
+    /**
+     * (0x1c) Logical shift right
+     */
+    SHR(0x1c, 2, 1, VeryLowTier),
+    /**
+     * (0x1d) Arithmetic shift right
+     */
+    SAR(0x1d, 2, 1, VeryLowTier),
 
     /*  Cryptographic Operations    */
 
@@ -171,6 +202,10 @@ public enum OpCode {
      * environment to memory
      */
     CODECOPY(0x39, 3, 0, VeryLowTier), // [len code_start mem_start CODECOPY]
+
+    RETURNDATASIZE(0x3d, 0, 1, BaseTier),
+
+    RETURNDATACOPY(0x3e, 3, 0, VeryLowTier),
     /**
      * (0x3a) Get price of gas in current
      * environment
@@ -186,6 +221,11 @@ public enum OpCode {
      * environment to memory with given offset
      */
     EXTCODECOPY(0x3c, 4, 0, ExtTier),
+    /**
+     * (0x3f) Returns the keccak256 hash of
+     * a contract’s code
+     */
+    EXTCODEHASH(0x3f, 1,1 , ExtTier),
 
     /*  Block Information   */
 
@@ -551,13 +591,14 @@ public enum OpCode {
     /**
      * (cxf1) Message-call into an account
      */
-    CALL(0xf1, 7, 1, SpecialTier),     //       [out_data_size] [out_data_start] [in_data_size] [in_data_start] [value] [to_addr]
+    CALL(0xf1, 7, 1, SpecialTier, CallFlags.Call, CallFlags.HasValue),
+    //       [out_data_size] [out_data_start] [in_data_size] [in_data_start] [value] [to_addr]
     // [gas] CALL
     /**
      * (0xf2) Calls self, but grabbing the code from the
      * TO argument instead of from one's own address
      */
-    CALLCODE(0xf2, 7, 1, SpecialTier),
+    CALLCODE(0xf2, 7, 1, SpecialTier, CallFlags.Call, CallFlags.HasValue, CallFlags.Stateless),
     /**
      * (0xf3) Halt execution returning output data
      */
@@ -569,7 +610,22 @@ public enum OpCode {
      *  and value as the original call.
      *  also the Value parameter is omitted for this opCode
      */
-    DELEGATECALL(0xf4, 6, 1, SpecialTier),
+    DELEGATECALL(0xf4, 6, 1, SpecialTier, CallFlags.Call, CallFlags.Stateless, CallFlags.Delegate),
+
+    /**
+     *  opcode that can be used to call another contract (or itself) while disallowing any
+     *  modifications to the state during the call (and its subcalls, if present).
+     *  Any opcode that attempts to perform such a modification (see below for details)
+     *  will result in an exception instead of performing the modification.
+     */
+    STATICCALL(0xfa, 6, 1, SpecialTier, CallFlags.Call, CallFlags.Static),
+
+    /**
+     * (0xfd) The `REVERT` instruction will stop execution, roll back all state changes done so far
+     * and provide a pointer to a memory section, which can be interpreted as an error code or message.
+     * While doing so, it will not consume all the remaining gas.
+     */
+    REVERT(0xfd, 2, 0, ZeroTier),
     /**
      * (0xff) Halt execution and register account for
      * later deletion
@@ -580,25 +636,29 @@ public enum OpCode {
     private final int require;
     private final Tier tier;
     private final int ret;
+    private final EnumSet<CallFlags> callFlags;
 
-    private static final Map<Byte, OpCode> intToTypeMap = new HashMap<>();
+    private static final OpCode[] intToTypeMap = new OpCode[256];
     private static final Map<String, Byte> stringToByteMap = new HashMap<>();
 
     static {
         for (OpCode type : OpCode.values()) {
-            intToTypeMap.put(type.opcode, type);
+            intToTypeMap[type.opcode & 0xFF] = type;
             stringToByteMap.put(type.name(), type.opcode);
         }
     }
 
     //require = required args
     //return = required return
-    private OpCode(int op, int require, int ret, Tier tier) {
+    private OpCode(int op, int require, int ret, Tier tier, CallFlags ... callFlags) {
         this.opcode = (byte) op;
         this.require = require;
         this.tier = tier;
         this.ret = ret;
+        this.callFlags = callFlags.length == 0 ? EnumSet.noneOf(CallFlags.class) :
+                EnumSet.copyOf(Arrays.asList(callFlags));
     }
+
 
     public byte val() {
         return opcode;
@@ -630,7 +690,54 @@ public enum OpCode {
     }
 
     public static OpCode code(byte code) {
-        return intToTypeMap.get(code);
+        return intToTypeMap[code & 0xFF];
+    }
+
+    private EnumSet<CallFlags> getCallFlags() {
+        return callFlags;
+    }
+
+    /**
+     * Indicates that opcode is a call
+     */
+    public boolean isCall() {
+        return getCallFlags().contains(CallFlags.Call);
+    }
+
+    private void checkCall() {
+        if (!isCall()) throw new RuntimeException("Opcode is not a call: " + this);
+    }
+
+    /**
+     *  Indicates that the code is executed in the context of the caller
+     */
+    public boolean callIsStateless() {
+        checkCall();
+        return getCallFlags().contains(CallFlags.Stateless);
+    }
+
+    /**
+     *  Indicates that the opcode has value parameter (3rd on stack)
+     */
+    public boolean callHasValue() {
+        checkCall();
+        return getCallFlags().contains(CallFlags.HasValue);
+    }
+
+    /**
+     *  Indicates that any state modifications are disallowed during the call
+     */
+    public boolean callIsStatic() {
+        checkCall();
+        return getCallFlags().contains(CallFlags.Static);
+    }
+
+    /**
+     *  Indicates that value and message sender are propagated from parent to child scope
+     */
+    public boolean callIsDelegate() {
+        checkCall();
+        return getCallFlags().contains(CallFlags.Delegate);
     }
 
     public Tier getTier() {
@@ -660,8 +767,32 @@ public enum OpCode {
         }
     }
 
-    ;
+    private enum CallFlags {
+        /**
+         * Indicates that opcode is a call
+         */
+        Call,
 
+        /**
+         *  Indicates that the code is executed in the context of the caller
+         */
+        Stateless,
+
+        /**
+         *  Indicates that the opcode has value parameter (3rd on stack)
+         */
+        HasValue,
+
+        /**
+         *  Indicates that any state modifications are disallowed during the call
+         */
+        Static,
+
+        /**
+         *  Indicates that value and message sender are propagated from parent to child scope
+         */
+        Delegate
+    }
 }
 
 

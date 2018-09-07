@@ -1,14 +1,33 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.sync;
 
+import org.ethereum.config.SystemProperties;
+import org.ethereum.core.BlockHeader;
+import org.ethereum.core.BlockHeaderWrapper;
 import org.ethereum.core.BlockWrapper;
-import org.ethereum.db.BlockStore;
 import org.ethereum.db.IndexedBlockStore;
 import org.ethereum.validator.BlockHeaderValidator;
+import org.ethereum.validator.EthashRule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
 import java.math.BigInteger;
@@ -18,7 +37,7 @@ import java.util.List;
  * Created by Anton Nashatyrev on 27.10.2016.
  */
 @Component
-@Lazy
+@Scope("prototype")
 public class FastSyncDownloader extends BlockDownloader {
     private final static Logger logger = LoggerFactory.getLogger("sync");
 
@@ -28,17 +47,27 @@ public class FastSyncDownloader extends BlockDownloader {
     @Autowired
     IndexedBlockStore blockStore;
 
+    private SyncQueueReverseImpl syncQueueReverse;
+
+    private EthashRule reverseEthashRule;
+
     int counter;
+    int maxCount;
     long t;
 
     @Autowired
-    public FastSyncDownloader(BlockHeaderValidator headerValidator) {
+    public FastSyncDownloader(BlockHeaderValidator headerValidator, SystemProperties systemProperties) {
         super(headerValidator);
+        reverseEthashRule = EthashRule.createReverse(systemProperties);
     }
 
-    public void startImporting(byte[] fromHash) {
-        SyncQueueReverseImpl syncQueueReverse = new SyncQueueReverseImpl(fromHash);
-        init(syncQueueReverse, syncPool);
+    public void startImporting(BlockHeader start, int count) {
+        this.maxCount = count <= 0 ? Integer.MAX_VALUE : count;
+        setHeaderQueueLimit(maxCount);
+        setBlockQueueLimit(maxCount);
+
+        syncQueueReverse = new SyncQueueReverseImpl(start.getHash(), start.getNumber() - count);
+        init(syncQueueReverse, syncPool, "FastSync");
     }
 
     @Override
@@ -47,21 +76,36 @@ public class FastSyncDownloader extends BlockDownloader {
 
             for (BlockWrapper blockWrapper : blockWrappers) {
                 blockStore.saveBlock(blockWrapper.getBlock(), BigInteger.ZERO, true);
+                counter++;
+                if (counter >= maxCount) {
+                    logger.info("FastSync: All requested " + counter + " blocks are downloaded. (last " +
+                            blockWrapper.getBlock().getShortDescr() + ")");
+                    stop();
+                    break;
+                }
             }
-            counter += blockWrappers.size();
 
             long c = System.currentTimeMillis();
             if (c - t > 5000) {
                 t = c;
-                logger.info("FastSync: downloaded " + counter + " blocks so far. Last: " + blockWrappers.get(0).getBlock().getShortDescr());
+                logger.info("FastSync: downloaded " + counter + " blocks so far. Last: " +
+                        blockWrappers.get(blockWrappers.size() - 1).getBlock().getShortDescr());
                 blockStore.flush();
             }
         }
     }
 
     @Override
-    protected int getBlockQueueSize() {
-        return 0;
+    protected void pushHeaders(List<BlockHeaderWrapper> headers) {}
+
+    @Override
+    protected int getBlockQueueFreeSize() {
+        return Math.max(maxCount - counter, MAX_IN_REQUEST);
+    }
+
+    @Override
+    protected int getMaxHeadersInQueue() {
+        return Math.max(maxCount - syncQueueReverse.getValidatedHeadersCount(), 0);
     }
 
     // TODO: receipts loading here
@@ -71,8 +115,12 @@ public class FastSyncDownloader extends BlockDownloader {
     }
 
     @Override
-    protected void downloadComplete() {
+    protected void finishDownload() {
         blockStore.flush();
-        blockStore.updateAllTotDifficulties();
+    }
+
+    @Override
+    protected boolean isValid(BlockHeader header) {
+        return super.isValid(header) && reverseEthashRule.validateAndLog(header, logger);
     }
 }

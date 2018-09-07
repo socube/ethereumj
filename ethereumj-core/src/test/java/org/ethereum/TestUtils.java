@@ -1,23 +1,33 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum;
 
 import org.ethereum.core.Block;
-import org.ethereum.db.IndexedBlockStore;
 import org.ethereum.vm.DataWord;
-import org.mapdb.DB;
-import org.mapdb.DBMaker;
-import org.mapdb.Serializer;
 import org.spongycastle.util.BigIntegers;
 
-import java.io.File;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 
 import static org.ethereum.crypto.HashUtil.EMPTY_TRIE_HASH;
 import static org.ethereum.crypto.HashUtil.randomHash;
-import static org.ethereum.db.IndexedBlockStore.BLOCK_INFO_SERIALIZER;
 
 public final class TestUtils {
 
@@ -31,38 +41,12 @@ public final class TestUtils {
     }
 
     public static DataWord randomDataWord() {
-        return new DataWord(randomBytes(32));
+        return DataWord.of(randomBytes(32));
     }
 
     public static byte[] randomAddress() {
         return randomBytes(20);
     }
-
-    public static Map<Long, List<IndexedBlockStore.BlockInfo>> createIndexMap(DB db){
-
-//        Map<Long, List<IndexedBlockStore.BlockInfo>> index = db.hashMapCreate("index")
-//                .keySerializer(Serializer.LONG)
-//                .valueSerializer(BLOCK_INFO_SERIALIZER)
-//                .makeOrGet();
-//
-//        return index;
-        return null;
-    }
-
-//    public static DB createMapDB(String testDBDir){
-//
-//        String blocksIndexFile = testDBDir + "/blocks/index";
-//        File dbFile = new File(blocksIndexFile);
-//        if (!dbFile.getParentFile().exists()) dbFile.getParentFile().mkdirs();
-//
-//        DB db = DBMaker.fileDB(dbFile)
-//                .transactionDisable()
-//                .closeOnJvmShutdown()
-//                .make();
-//
-//
-//        return db;
-//    }
 
     public static List<Block> getRandomChain(byte[] startParentHash, long startNumber, long length){
 
@@ -74,10 +58,10 @@ public final class TestUtils {
 
         for (int i = 0; i < length; ++i){
 
-            byte[] difficutly = BigIntegers.asUnsignedByteArray(new BigInteger(8, new Random()));
+            byte[] difficulty = BigIntegers.asUnsignedByteArray(new BigInteger(8, new Random()));
             byte[] newHash = randomHash();
 
-            Block block = new Block(lastHash, newHash,  null, null, difficutly, lastIndex, new byte[] {0}, 0, 0, null, null,
+            Block block = new Block(lastHash, newHash,  null, null, difficulty, lastIndex, new byte[] {0}, 0, 0, null, null,
                     null, null, EMPTY_TRIE_HASH, randomHash(), null, null);
 
             ++lastIndex;
@@ -88,5 +72,37 @@ public final class TestUtils {
         return result;
     }
 
+    // Generates chain with alternative sub-chains, maxHeight blocks on each level
+    public static List<Block> getRandomAltChain(byte[] startParentHash, long startNumber, long length, int maxHeight){
 
+        List<Block> result = new ArrayList<>();
+
+        List<byte[]> lastHashes = new ArrayList<>();
+        lastHashes.add(startParentHash);
+        long lastIndex = startNumber;
+        Random rnd = new Random();
+
+        for (int i = 0; i < length; ++i){
+            List<byte[]> currentHashes = new ArrayList<>();
+            int curMaxHeight = maxHeight;
+            if (i == 0) curMaxHeight = 1;
+
+            for (int j = 0; j < curMaxHeight; ++j){
+                byte[] parentHash = lastHashes.get(rnd.nextInt(lastHashes.size()));
+                byte[] difficulty = BigIntegers.asUnsignedByteArray(new BigInteger(8, new Random()));
+                byte[] newHash = randomHash();
+
+                Block block = new Block(parentHash, newHash, null, null, difficulty, lastIndex, new byte[]{0}, 0, 0, null, null,
+                        null, null, EMPTY_TRIE_HASH, randomHash(), null, null);
+                currentHashes.add(block.getHash());
+                result.add(block);
+            }
+
+            ++lastIndex;
+            lastHashes.clear();
+            lastHashes.addAll(currentHashes);
+        }
+
+        return result;
+    }
 }

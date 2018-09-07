@@ -1,9 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.config;
 
-import org.ethereum.datasource.CachingDataSource;
-import org.ethereum.datasource.KeyValueDataSource;
+import org.ethereum.datasource.*;
 import org.ethereum.db.BlockStore;
 import org.ethereum.db.IndexedBlockStore;
+import org.ethereum.db.PruneManager;
 import org.ethereum.db.TransactionStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,34 +50,33 @@ public class DefaultConfig {
     SystemProperties config;
 
     public DefaultConfig() {
-        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-            @Override
-            public void uncaughtException(Thread t, Throwable e) {
-                logger.error("Uncaught exception", e);
-            }
-        });
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> logger.error("Uncaught exception", e));
     }
 
     @Bean
     public BlockStore blockStore(){
-        KeyValueDataSource index = commonConfig.keyValueDataSource();
-        index.setName("index");
-        index.init();
-        KeyValueDataSource blocks = commonConfig.keyValueDataSource();
-        blocks.setName("block");
-        blocks.init();
+        commonConfig.fastSyncCleanUp();
         IndexedBlockStore indexedBlockStore = new IndexedBlockStore();
-        indexedBlockStore.init(new CachingDataSource(index), new CachingDataSource(blocks));
+        Source<byte[], byte[]> block = commonConfig.cachedDbSource("block");
+        Source<byte[], byte[]> index = commonConfig.cachedDbSource("index");
+        indexedBlockStore.init(index, block);
 
         return indexedBlockStore;
     }
 
     @Bean
     public TransactionStore transactionStore() {
-        KeyValueDataSource ds = commonConfig.keyValueDataSource();
-        ds.setName("transactions");
-        ds.init();
-        CachingDataSource cachingDataSource = new CachingDataSource(ds);
-        return new TransactionStore(cachingDataSource);
+        commonConfig.fastSyncCleanUp();
+        return new TransactionStore(commonConfig.cachedDbSource("transactions"));
+    }
+
+    @Bean
+    public PruneManager pruneManager() {
+        if (config.databasePruneDepth() >= 0) {
+            return new PruneManager((IndexedBlockStore) blockStore(), commonConfig.stateSource().getJournalSource(),
+                    commonConfig.stateSource().getNoJournalSource(), config.databasePruneDepth());
+        } else {
+            return new PruneManager(null, null, null, -1); // dummy
+        }
     }
 }

@@ -1,5 +1,23 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
+import org.ethereum.util.ByteUtil;
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPElement;
 import org.ethereum.util.RLPList;
@@ -12,7 +30,6 @@ import java.math.BigInteger;
 import java.util.*;
 
 import static java.util.Collections.*;
-import static org.apache.commons.lang3.ArrayUtils.isEmpty;
 import static org.apache.commons.lang3.ArrayUtils.isNotEmpty;
 import static org.ethereum.util.BIUtil.toBI;
 
@@ -76,7 +93,7 @@ public class TransactionExecutionSummary {
     }
 
     private static BigInteger decodeBigInteger(byte[] encoded) {
-        return isEmpty(encoded) ? BigInteger.ZERO : new BigInteger(1, encoded);
+        return ByteUtil.bytesToBigInteger(encoded);
     }
 
     public byte[] getEncoded() {
@@ -124,8 +141,8 @@ public class TransactionExecutionSummary {
         for (RLPElement entry : (RLPList) encoded) {
             RLPList asList = (RLPList) entry;
 
-            DataWord key = new DataWord(asList.get(0).getRLPData());
-            DataWord value = new DataWord(asList.get(1).getRLPData());
+            DataWord key = DataWord.of(asList.get(0).getRLPData());
+            DataWord value = DataWord.of(asList.get(1).getRLPData());
             byte[] changedBytes = asList.get(2).getRLPData();
             boolean changed = isNotEmpty(changedBytes) && RLP.decodeInt(changedBytes, 0) == 1;
 
@@ -167,8 +184,8 @@ public class TransactionExecutionSummary {
     private static Map<DataWord, DataWord> decodeStorageDiff(RLPList storageDiff) {
         Map<DataWord, DataWord> result = new HashMap<>();
         for (RLPElement entry : storageDiff) {
-            DataWord key = new DataWord(((RLPList) entry).get(0).getRLPData());
-            DataWord value = new DataWord(((RLPList) entry).get(1).getRLPData());
+            DataWord key = DataWord.of(((RLPList) entry).get(0).getRLPData());
+            DataWord value = DataWord.of(((RLPList) entry).get(1).getRLPData());
             result.put(key, value);
         }
         return result;
@@ -205,7 +222,7 @@ public class TransactionExecutionSummary {
     private static List<DataWord> decodeDeletedAccounts(RLPList deletedAccounts) {
         List<DataWord> result = new ArrayList<>();
         for (RLPElement deletedAccount : deletedAccounts) {
-            result.add(new DataWord(deletedAccount.getRLPData()));
+            result.add(DataWord.of(deletedAccount.getRLPData()));
         }
         return result;
     }

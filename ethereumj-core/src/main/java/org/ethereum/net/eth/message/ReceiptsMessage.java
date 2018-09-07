@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.message;
 
 import org.ethereum.core.Bloom;
@@ -31,7 +48,8 @@ public class ReceiptsMessage extends EthMessage {
         parsed = true;
     }
 
-    private void parse() {
+    private synchronized void parse() {
+        if (parsed) return;
         RLPList paramsList = (RLPList) RLP.decode2(encoded).get(0);
 
         this.receipts = new ArrayList<>();
@@ -79,7 +97,7 @@ public class ReceiptsMessage extends EthMessage {
 
 
     public List<List<TransactionReceipt>> getReceipts() {
-        if (!parsed) parse();
+        parse();
         return receipts;
     }
 
@@ -94,7 +112,7 @@ public class ReceiptsMessage extends EthMessage {
     }
 
     public String toString() {
-        if (!parsed) parse();
+        parse();
         final StringBuilder sb = new StringBuilder();
         if (receipts.size() < 4) {
             for (List<TransactionReceipt> blockReceipts : receipts)

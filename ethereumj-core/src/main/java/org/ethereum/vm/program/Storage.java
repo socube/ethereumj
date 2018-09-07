@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm.program;
 
 import org.ethereum.core.AccountState;
@@ -10,7 +27,9 @@ import org.ethereum.vm.program.invoke.ProgramInvoke;
 import org.ethereum.vm.program.listener.ProgramListener;
 import org.ethereum.vm.program.listener.ProgramListenerAware;
 
+import javax.annotation.Nullable;
 import java.math.BigInteger;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -58,6 +77,11 @@ public class Storage implements Repository, ProgramListenerAware {
     }
 
     @Override
+    public BigInteger setNonce(byte[] addr, BigInteger nonce) {
+        return repository.setNonce(addr, nonce);
+    }
+
+    @Override
     public BigInteger getNonce(byte[] addr) {
         return repository.getNonce(addr);
     }
@@ -83,13 +107,18 @@ public class Storage implements Repository, ProgramListenerAware {
     }
 
     @Override
+    public byte[] getCodeHash(byte[] addr) {
+        return repository.getCodeHash(addr);
+    }
+
+    @Override
     public void addStorageRow(byte[] addr, DataWord key, DataWord value) {
         if (canListenTrace(addr)) programListener.onStoragePut(key, value);
         repository.addStorageRow(addr, key, value);
     }
 
     private boolean canListenTrace(byte[] address) {
-        return (programListener != null) && this.address.equals(new DataWord(address));
+        return (programListener != null) && this.address.equals(DataWord.of(address));
     }
 
     @Override
@@ -195,4 +224,18 @@ public class Storage implements Repository, ProgramListenerAware {
         throw new UnsupportedOperationException();
     }
 
+    @Override
+    public int getStorageSize(byte[] addr) {
+        return repository.getStorageSize(addr);
+    }
+
+    @Override
+    public Set<DataWord> getStorageKeys(byte[] addr) {
+        return repository.getStorageKeys(addr);
+    }
+
+    @Override
+    public Map<DataWord, DataWord> getStorage(byte[] addr, @Nullable Collection<DataWord> keys) {
+        return repository.getStorage(addr, keys);
+    }
 }

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm;
 
 /**
@@ -6,34 +23,10 @@ package org.ethereum.vm;
  */
 public class MessageCall {
 
-    public enum MsgType {
-        CALL,
-        CALLCODE,
-        DELEGATECALL,
-        POST;
-
-        /**
-         *  Indicates that the code is executed in the context of the caller
-         */
-        public boolean isStateless() {
-            return this == CALLCODE || this == DELEGATECALL;
-        }
-
-        public static MsgType fromOpcode(OpCode opCode) {
-            switch (opCode) {
-                case CALL: return CALL;
-                case CALLCODE: return CALLCODE;
-                case DELEGATECALL: return DELEGATECALL;
-                default:
-                    throw new RuntimeException("Invalid call opCode: " + opCode);
-            }
-        }
-    }
-
     /**
      * Type of internal call. Either CALL, CALLCODE or POST
      */
-    private final MsgType type;
+    private final OpCode type;
 
     /**
      * gas to pay for the call, remaining gas will be refunded to the caller
@@ -64,7 +57,7 @@ public class MessageCall {
      */
     private DataWord outDataSize;
 
-    public MessageCall(MsgType type, DataWord gas, DataWord codeAddress,
+    public MessageCall(OpCode type, DataWord gas, DataWord codeAddress,
                        DataWord endowment, DataWord inDataOffs, DataWord inDataSize) {
         this.type = type;
         this.gas = gas;
@@ -74,7 +67,7 @@ public class MessageCall {
         this.inDataSize = inDataSize;
     }
 
-    public MessageCall(MsgType type, DataWord gas, DataWord codeAddress,
+    public MessageCall(OpCode type, DataWord gas, DataWord codeAddress,
                        DataWord endowment, DataWord inDataOffs, DataWord inDataSize,
                        DataWord outDataOffs, DataWord outDataSize) {
         this(type, gas, codeAddress, endowment, inDataOffs, inDataSize);
@@ -82,7 +75,7 @@ public class MessageCall {
         this.outDataSize = outDataSize;
     }
 
-    public MsgType getType() {
+    public OpCode getType() {
         return type;
     }
 

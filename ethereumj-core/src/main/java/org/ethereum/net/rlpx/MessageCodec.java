@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.rlpx;
 
 import com.google.common.io.ByteStreams;
@@ -12,13 +29,13 @@ import org.ethereum.net.eth.EthVersion;
 import org.ethereum.net.eth.message.EthMessageCodes;
 import org.ethereum.net.message.Message;
 import org.ethereum.net.message.MessageFactory;
+import org.ethereum.net.message.ReasonCode;
 import org.ethereum.net.p2p.P2pMessageCodes;
 import org.ethereum.net.server.Channel;
 import org.ethereum.net.shh.ShhMessageCodes;
 import org.ethereum.net.swarm.bzz.BzzMessageCodes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
@@ -29,6 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.lang.Math.min;
 import static org.ethereum.net.rlpx.FrameCodec.Frame;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * The Netty codec which encodes/decodes RPLx frames to subprotocol Messages
@@ -58,7 +76,7 @@ public class MessageCodec extends MessageToMessageCodec<Frame, Message> {
 
     private SystemProperties config;
 
-    private boolean supportChunkedFrames = true;
+    private boolean supportChunkedFrames = false;
 
     Map<Integer, Pair<? extends List<Frame>, AtomicInteger>> incompleteFrames = new LRUMap<>(16);
     // LRU avoids OOM on invalid peers
@@ -78,7 +96,7 @@ public class MessageCodec extends MessageToMessageCodec<Frame, Message> {
         Frame completeFrame = null;
         if (frame.isChunked()) {
             if (!supportChunkedFrames && frame.totalFrameSize > 0) {
-                throw new RuntimeException("Faming is not supported in this configuration.");
+                throw new RuntimeException("Framing is not supported in this configuration.");
             }
 
             Pair<? extends List<Frame>, AtomicInteger> frameParts = incompleteFrames.get(frame.contextId);
@@ -87,6 +105,7 @@ public class MessageCodec extends MessageToMessageCodec<Frame, Message> {
 //                    loggerNet.warn("No initial frame received for context-id: " + frame.contextId + ". Discarding this frame as invalid.");
                     // TODO: refactor this logic (Cpp sends non-chunked frames with context-id)
                     Message message = decodeMessage(ctx, Collections.singletonList(frame));
+                    if (message == null) return;
                     out.add(message);
                     return;
                 } else {
@@ -133,12 +152,19 @@ public class MessageCodec extends MessageToMessageCodec<Frame, Message> {
         }
 
         if (loggerWire.isDebugEnabled())
-            loggerWire.debug("Recv: Encoded: {} [{}]", frameType, Hex.toHexString(payload));
+            loggerWire.debug("Recv: Encoded: {} [{}]", frameType, toHexString(payload));
 
-        Message msg = createMessage((byte) frameType, payload);
+        Message msg;
+        try {
+            msg = createMessage((byte) frameType, payload);
 
-        if (loggerNet.isDebugEnabled())
-            loggerNet.debug("From: \t{} \tRecv: \t{}", channel, msg.toString());
+            if (loggerNet.isDebugEnabled())
+                loggerNet.debug("From: {}    Recv:  {}", channel, msg.toString());
+        } catch (Exception ex) {
+            loggerNet.debug(String.format("Incorrectly encoded message from: \t%s, dropping peer", channel), ex);
+            channel.disconnect(ReasonCode.BAD_PROTOCOL);
+            return null;
+        }
 
         ethereumListener.onRecvMessage(channel, msg);
 
@@ -152,12 +178,12 @@ public class MessageCodec extends MessageToMessageCodec<Frame, Message> {
         ethereumListener.trace(output);
 
         if (loggerNet.isDebugEnabled())
-            loggerNet.debug("To: \t{} \tSend: \t{}", channel, msg);
+            loggerNet.debug("To:   {}    Send:  {}", channel, msg);
 
         byte[] encoded = msg.getEncoded();
 
         if (loggerWire.isDebugEnabled())
-            loggerWire.debug("Send: Encoded: {} [{}]", getCode(msg.getCommand()), Hex.toHexString(encoded));
+            loggerWire.debug("Send: Encoded: {} [{}]", getCode(msg.getCommand()), toHexString(encoded));
 
         List<Frame> frames = splitMessageToFrames(msg);
 
@@ -245,7 +271,7 @@ public class MessageCodec extends MessageToMessageCodec<Frame, Message> {
             return bzzMessageFactory.create(resolved, payload);
         }
 
-        throw new IllegalArgumentException("No such message: " + code + " [" + Hex.toHexString(payload) + "]");
+        throw new IllegalArgumentException("No such message: " + code + " [" + toHexString(payload) + "]");
     }
 
     public void setChannel(Channel channel){

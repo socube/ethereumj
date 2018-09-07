@@ -1,9 +1,23 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.facade;
 
-import org.ethereum.core.Block;
-import org.ethereum.core.CallTransaction;
-import org.ethereum.core.Transaction;
-import org.ethereum.core.TransactionReceipt;
+import org.ethereum.core.*;
 import org.ethereum.crypto.ECKey;
 import org.ethereum.listener.EthereumListener;
 import org.ethereum.manager.AdminInfo;
@@ -18,7 +32,7 @@ import org.ethereum.vm.program.ProgramResult;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.util.List;
-import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 
 /**
@@ -46,6 +60,11 @@ public interface Ethereum {
     boolean isConnected();
 
     void close();
+
+    /**
+     * Gets the current sync state
+     */
+    SyncStatus getSyncStatus();
 
     /**
      * Factory for general transaction
@@ -89,6 +108,19 @@ public interface Ethereum {
     TransactionReceipt callConstant(Transaction tx, Block block);
 
     /**
+     * Executes Txes of the block in the same order and from the same state root
+     * as they were executed during regular block import
+     * This method doesn't make changes in blockchain state
+     *
+     * <b>Note:</b> requires block's ancestor to be presented in the database
+     *
+     * @param block block to be replayed
+     * @return block summary with receipts and execution summaries
+     *         <b>Note:</b> it doesn't include block rewards info
+     */
+    BlockSummary replayBlock(Block block);
+
+    /**
      * Call a contract function locally without sending transaction to the network
      * and without changing contract storage.
      * @param receiveAddress hex encoded contract address
@@ -116,9 +148,18 @@ public interface Ethereum {
                                        CallTransaction.Function function, Object... funcArgs);
 
     /**
+     * Returns the Repository instance which always refers to the latest (best block) state
+     * It is always better using {@link #getLastRepositorySnapshot()} to work on immutable
+     * state as this instance can change its state between calls (when a new block is imported)
+     *
      * @return - repository for all state data.
      */
     Repository getRepository();
+
+    /**
+     * Returns the latest (best block) Repository snapshot
+     */
+    Repository getLastRepositorySnapshot();
 
     /**
      * @return - pending state repository
@@ -161,13 +202,36 @@ public interface Ethereum {
     void initSyncing();
 
     /**
+     * @deprecated
      * Calculates a 'reasonable' Gas price based on statistics of the latest transaction's Gas prices
      * Normally the price returned should be sufficient to execute a transaction since ~25% of the latest
      * transactions were executed at this or lower price.
      * If the transaction is wanted to be executed promptly with higher chances the returned price might
      * be increased at some ratio (e.g. * 1.2)
+     *
+     * <b>UPDATED</b>: Old version of gas tracking greatly fluctuates in networks with big number of transactions
+     * like Ethereum MainNet. But it's light and simple and still could be used for test networks. If you
+     * want to get accurate recommended gas price use {@link org.ethereum.listener.RecommendedGasPriceTracker}
+     * instead by adding it to listener and polling data.
+     * Updated tracker is not enabled by default because it needs noticeable resources
+     * and is excessive for most users.
      */
+    @Deprecated
     long getGasPrice();
+
+    /**
+     * Chain id for next block.
+     * Introduced in EIP-155
+     * @return chain id or null
+     */
+    Integer getChainIdForNextBlock();
+
+    /**
+     * Manual switch to Short Sync mode
+     * Maybe useful in small private and detached networks when automatic detection fails
+     * @return Future, which completes when syncDone is turned to True in {@link org.ethereum.sync.SyncManager}
+     */
+    CompletableFuture<Void> switchToShortSync();
 
     void exitOn(long number);
 }

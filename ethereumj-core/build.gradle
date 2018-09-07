@@ -3,11 +3,12 @@ import java.text.SimpleDateFormat
 buildscript {
     repositories {
         jcenter()
-        maven { url 'http://repo.spring.io/plugins-release-local' }
+        maven { url 'http://repo.spring.io/plugins-release' }
     }
     dependencies {
-        classpath 'org.springframework.build.gradle:propdeps-plugin:0.0.7'
+        classpath 'io.spring.gradle:propdeps-plugin:0.0.9.RELEASE'
         classpath 'org.jfrog.buildinfo:build-info-extractor-gradle:3.0.1'
+        classpath 'com.typesafe:config:1.2.1'
     }
 }
 
@@ -15,18 +16,18 @@ buildscript {
 plugins {
     id 'application'
     id 'jacoco'
-    id 'com.github.johnrengelman.shadow' version '1.2.3'
-    id 'com.github.kt3k.coveralls' version '2.0.1x'
+    id 'com.github.kt3k.coveralls' version '2.6.3'
     id 'com.jfrog.bintray' version '1.0'
+    id 'org.ajoberstar.grgit' version '2.2.0' apply false
 }
 
 apply plugin: 'propdeps-maven'
 apply plugin: 'com.jfrog.artifactory-upload'
 
-sourceCompatibility = 1.7
+sourceCompatibility = 1.8
 
 mainClassName = 'org.ethereum.Start'
-applicationDefaultJvmArgs = ["-server", "-Xss32m", "-Xmx3500M", "-XX:-OmitStackTraceInFastThrow"]
+applicationDefaultJvmArgs = ["-server", "-Xss2m", "-Xmx2G", "-XX:-OmitStackTraceInFastThrow"]
 
 if ( project.hasProperty('jvmArgs') ) {
     applicationDefaultJvmArgs = applicationDefaultJvmArgs + project.jvmArgs.split('\\s+').toList()
@@ -45,10 +46,10 @@ tasks.withType(JavaCompile){
     options.warnings = false
 }
 
-task runMorden (type: JavaExec) {
+task runRopsten (type: JavaExec) {
     main = mainClassName
     classpath = sourceSets.main.runtimeClasspath
-    jvmArgs = applicationDefaultJvmArgs + '-Dethereumj.conf.res=morden.conf'
+    jvmArgs = applicationDefaultJvmArgs + '-Dethereumj.conf.res=ropsten.conf'
 }
 
 task runTest (type: JavaExec) {
@@ -67,40 +68,52 @@ task tckRun(type:JavaExec){
 
     if (project.hasProperty("filePath")) {
         args = ["filerun", "$filePath"]
-        jvmArgs = ["-Xss32M"]
+        jvmArgs = ["-Xss4M"]
     }
 
     if (project.hasProperty("content")) {
         args = ["content", "$content"]
-        jvmArgs = ["-Xss32M"]
+        jvmArgs = ["-Xss4M"]
     }
 
     main = "org.ethereum.tck.RunTck"
     classpath = sourceSets.test.runtimeClasspath
 }
 
-
-
+/**
+ * Runs all tests
+ * EthereumJ also runs common Ethereum clients tests
+ * See {@link #prepareGithubTests()} if you want to use local repo
+ * instead of downloading tests during test execution
+ */
 test {
 
     beforeTest { descriptor ->
         logger.lifecycle("Running test: ${descriptor}")
     }
 
-    jvmArgs '-Xss32m', '-Xmx3G'
+    jvmArgs = ["-Xss8m", "-Xmx3G"]
+
+    prepareGithubTests()
+    // If Github tests directory is provided, it's passed to test runner
+    if (System.getProperty("GitHubTests.testPath") != null) {
+        jvmArgs.add('-DGitHubTests.testPath' + '=' + System.getProperty("GitHubTests.testPath"))
+    }
 
     testLogging {
         events "failed"
         exceptionFormat "short"
     }
 
+    systemProperties System.properties
+    systemProperty "user.dir", workingDir
     systemProperty "file.encoding", "UTF-8"
 }
 
 ext {
     slf4jVersion = '1.7.7'
     leveldbVersion = '0.7'
-    scastleVersion = '1.53.0.0'
+    scastleVersion = '1.58.0.0'
     springVersion = '4.2.0.RELEASE'
     hibernateVersion = '4.3.7.Final'
     junitVersion = '4.11'
@@ -115,34 +128,36 @@ dependencies {
 
     compile "org.ethereum:leveldbjni-all:1.18.3"             // native leveldb components
 
-    compile "org.ethereum:solcJ-all:0.4.3"                   // Solidity Compiler win/mac/linux binaries
+    compile "org.ethereum:rocksdbjni:5.9.2"                   // RocksDB Java API
+
+    compile "org.ethereum:solcJ-all:0.4.19"                  // Solidity Compiler win/mac/linux binaries
+
+    compile "com.google.guava:guava:24.1-jre"
 
     compile "com.cedarsoftware:java-util:1.8.0" // for deep equals
-    compile "org.javassist:javassist:3.15.0-GA"
     compile "org.slf4j:slf4j-api:${slf4jVersion}"
     compile "ch.qos.logback:logback-classic:1.1.7"
-    compile "org.codehaus.jackson:jackson-mapper-asl:1.9.13"
-    compile "com.google.code.findbugs:jsr305:3.0.0"
     compile "com.fasterxml.jackson.core:jackson-databind:2.5.1"
     compile "org.apache.commons:commons-collections4:4.0"
     compile "org.apache.commons:commons-lang3:3.4"
     compile "commons-codec:commons-codec:1.10"
     compile "org.springframework:spring-context:${springVersion}"
-    compile "org.springframework:spring-tx:${springVersion}"
-    compile "org.springframework:spring-orm:${springVersion}"
     compile "com.typesafe:config:1.2.1"
-
-    compile "org.mapdb:mapdb:2.0-beta12"
+    compile "com.googlecode.concurrent-locks:concurrent-locks:1.0.0"
 
     compile("com.googlecode.json-simple:json-simple:1.1.1") {
         exclude group: 'junit', module: 'junit'
     }
+
+    compile "org.xerial.snappy:snappy-java:1.1.4" // Snappy compression
 
     // used to hide spring initialization logs messages in samples
     optional "org.slf4j:jcl-over-slf4j:${slf4jVersion}"
 
     testCompile "junit:junit:${junitVersion}"
     testCompile "org.springframework:spring-test:${springVersion}"
+    testCompile "org.mockito:mockito-core:2.+"
+    testCompile "com.github.briandilley.jsonrpc4j:jsonrpc4j:1.1"
 }
 
 
@@ -152,11 +167,21 @@ javadoc {
     options.addStringOption('-quiet')
     options.encoding = "UTF-8"
     options.links(
-            "http://docs.oracle.com/javase/7/docs/api/",
+            "http://docs.oracle.com/javase/8/docs/api/",
             "http://netty.io/4.0/api/"
     )
 }
 
+//create a single Jar with all dependencies
+task fatJar(type: Jar) {
+    classifier = 'all'
+    manifest {
+        attributes 'Main-Class' : mainClassName
+        attributes 'Class-Path' : configurations.compile.collect { 'lib/' + it.getName() }.join(' ')
+    }
+    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+    with jar
+}
 
 task sourcesJar(type: Jar, dependsOn: classes) {
     classifier = 'sources'
@@ -276,8 +301,8 @@ def customizePom(pom, gradleProject) {
             }
             licenses {
                 license {
-                    name "The MIT License"
-                    url "http://mit-license.org/"
+                    name "GNU Lesser General Public License v3.0"
+                    url "https://www.gnu.org/licenses/lgpl-3.0.en.html"
                     distribution "repo"
                 }
             }
@@ -291,6 +316,24 @@ def customizePom(pom, gradleProject) {
                     id = "rmandeleil"
                     name = "Roman Mandeleil"
                     email = "roman.mandeleil@gmail.com"
+                }
+
+                developer {
+                    id = "Nashatyrev"
+                    name = "Anton Nashatyrev"
+                    email = "Anton.nashatyrev@gmail.com"
+                }
+
+                developer {
+                    id = "zilm13"
+                    name = "Dmitry Shmatko"
+                    email = "zilm@zilm.net"
+                }
+
+                developer {
+                    id = "mkalinin"
+                    name = "Mikhail Kalinin"
+                    email = "noblesse.knight@gmail.com"
                 }
             }
             issueManagement {
@@ -320,3 +363,73 @@ def gitCurBranch() {
     return process.text.trim()
 }
 
+/**
+ * This method is used to prepare local Ethereum Github tests for EthereumJ tests
+ *
+ * These tests  are designed for all Ethereum clients and
+ * maintained by Ethereum Foundation/Community.
+ * EthereumJ executes all of them but by default downloads every
+ * single file using internet connection.
+ * Alternatively you could use local repo to run tests from it.
+ *
+ * Common usage:
+ * 1) Local run:
+ *  a. Clone Ethereum tests repo (https://github.com/ethereum/tests)
+ *    to some local directory
+ *  b. Create `test-user.conf` file in test resources directory.
+ *    This file is under `.gitignore`, so it's your local file only.
+ *    You could override any EthereumJ configuration in it, but
+ *    for using local Ethereum tests repo you need following line:
+ *    GitHubTests.testPath=/some/path/with/Ethereum/tests/repo
+ *  c. Run `./gradlew test` task.
+ * 2) CI run:
+ *  a. Clone Ethereum tests repo (https://github.com/ethereum/tests)
+ *    to some local directory
+ *  b. Run `test` task with following parameter:
+ *    -DGitHubTests.testPath=/some/path/with/Ethereum/tests/repo
+ *
+ * In both cases this method will get commit hash from
+ * `src/test/resources/github-tests.prop` and checkout local repo
+ * to specific commit. So, EthereumJ tests will run common
+ * Ethereum client tests using local copy of repository.
+ *
+ * Repo with tests is changed often and EthereumJ is guaranteed
+ * to pass only tests from specific commit.
+ */
+import org.ajoberstar.grgit.Grgit
+import com.typesafe.config.Config
+import com.typesafe.config.ConfigFactory
+def prepareGithubTests() {
+    String testsPathKey = "GitHubTests.testPath"
+    String testsCommitKey = "GitHubTests.commit"
+    String testUserConf = "ethereumj-core/src/test/resources/test-user.conf"
+    String githubTestsProp = "ethereumj-core/src/test/resources/github-tests.prop"
+    def repoPath = System.getProperty(testsPathKey)
+    if (repoPath == null) {
+        try {
+            Config userTest = ConfigFactory.parseFile(new File(testUserConf))
+            repoPath = userTest.getString(testsPathKey)
+        } catch (Exception ex) {}
+    }
+    if (repoPath == null) return
+    def commit = System.getProperty(testsCommitKey)
+    if (commit == null) {
+        Properties testProp = new Properties();
+        testProp.load(new File(githubTestsProp).newDataInputStream());
+        commit = testProp.getProperty(testsCommitKey)
+    }
+    if (repoPath != null && commit != null) {
+        println "Tests: Checking out Ethereum Tests repo at " + repoPath + " to commit #" + commit
+        try {
+            def testsRepo = Grgit.open(dir: repoPath)
+            testsRepo.fetch()
+            testsRepo.checkout(branch: commit)
+        } catch (Exception ex) {
+            println "Error occurs while trying to checkout local Ethereum tests repo to specific commit"
+            println "Either remove " + testsPathKey + " property to use remote repo in tests or fix the issue"
+            println "Error: "
+            println ex
+            throw ex
+        }
+    }
+}

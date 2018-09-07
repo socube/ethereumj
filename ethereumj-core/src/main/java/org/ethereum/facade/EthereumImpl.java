@@ -1,6 +1,24 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.facade;
 
 import org.apache.commons.lang3.ArrayUtils;
+import org.ethereum.config.BlockchainConfig;
 import org.ethereum.config.CommonConfig;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.*;
@@ -21,6 +39,7 @@ import org.ethereum.net.server.ChannelManager;
 import org.ethereum.net.shh.Whisper;
 import org.ethereum.net.submit.TransactionExecutor;
 import org.ethereum.net.submit.TransactionTask;
+import org.ethereum.sync.SyncManager;
 import org.ethereum.util.ByteUtil;
 import org.ethereum.vm.program.ProgramResult;
 import org.ethereum.vm.program.invoke.ProgramInvokeFactory;
@@ -37,8 +56,11 @@ import org.springframework.util.concurrent.FutureAdapter;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * @author Roman Mandeleil
@@ -75,6 +97,9 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
     PendingState pendingState;
 
     @Autowired
+    SyncManager syncManager;
+
+    @Autowired
     CommonConfig commonConfig = CommonConfig.getDefault();
 
     private SystemProperties config;
@@ -90,7 +115,7 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
         this.config = config;
         System.out.println();
         this.compositeEthereumListener.addListener(gasPriceTracker);
-        gLogger.info("EthereumJ node started: enode://" + Hex.toHexString(config.nodeId()) + "@" + config.externalIp() + ":" + config.listenPort());
+        gLogger.info("EthereumJ node started: enode://" + toHexString(config.nodeId()) + "@" + config.externalIp() + ":" + config.listenPort());
     }
 
     @Override
@@ -110,7 +135,7 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
 
     @Override
     public void connect(final String ip, final int port, final String remoteId) {
-        logger.info("Connecting to: {}:{}", ip, port);
+        logger.debug("Connecting to: {}:{}", ip, port);
         worldManager.getActivePeer().connectAsync(ip, port, remoteId, false);
     }
 
@@ -144,9 +169,13 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
 
     @Override
     public void close() {
-        logger.info("Shutting down Ethereum instance...");
-        worldManager.close();
+        logger.info("### Shutdown initiated ### ");
         ((AbstractApplicationContext) getApplicationContext()).close();
+    }
+
+    @Override
+    public SyncStatus getSyncStatus() {
+        return syncManager.getSyncStatus();
     }
 
     @Override
@@ -172,7 +201,7 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
         byte[] valueBytes = ByteUtil.bigIntegerToBytes(value);
 
         return new Transaction(nonceBytes, gasPriceBytes, gasBytes,
-                receiveAddress, valueBytes, data);
+                receiveAddress, valueBytes, data, getChainIdForNextBlock());
     }
 
 
@@ -197,39 +226,50 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
     @Override
     public TransactionReceipt callConstant(Transaction tx, Block block) {
         if (tx.getSignature() == null) {
-            tx.sign(ECKey.fromPrivate(new byte[32]));
+            tx.sign(ECKey.DUMMY);
         }
         return callConstantImpl(tx, block).getReceipt();
     }
 
+    @Override
     public BlockSummary replayBlock(Block block) {
         List<TransactionReceipt> receipts = new ArrayList<>();
         List<TransactionExecutionSummary> summaries = new ArrayList<>();
 
-        Repository repository = ((Repository) worldManager.getRepository())
-                .getSnapshotTo(block.getStateRoot())
-                .startTracking();
+        Block parent = worldManager.getBlockchain().getBlockByHash(block.getParentHash());
+
+        if (parent == null) {
+            logger.info("Failed to replay block #{}, its ancestor is not presented in the db", block.getNumber());
+            return new BlockSummary(block, new HashMap<byte[], BigInteger>(), receipts, summaries);
+        }
+
+        Repository track = ((Repository) worldManager.getRepository())
+                .getSnapshotTo(parent.getStateRoot());
 
         try {
             for (Transaction tx : block.getTransactionsList()) {
-                org.ethereum.core.TransactionExecutor executor = commonConfig.transactionExecutor(
-                        tx, block.getCoinbase(), repository, worldManager.getBlockStore(),
-                        programInvokeFactory, block, worldManager.getListener(), 0);
 
-                executor.setLocalCall(true);
+                Repository txTrack = track.startTracking();
+                org.ethereum.core.TransactionExecutor executor = new org.ethereum.core.TransactionExecutor(
+                        tx, block.getCoinbase(), txTrack, worldManager.getBlockStore(),
+                        programInvokeFactory, block, worldManager.getListener(), 0)
+                        .withCommonConfig(commonConfig);
+
                 executor.init();
                 executor.execute();
                 executor.go();
 
                 TransactionExecutionSummary summary = executor.finalization();
+
+                txTrack.commit();
+
                 TransactionReceipt receipt = executor.getReceipt();
-                // TODO: change to repository.getRoot() after RepositoryTrack implementation
-                receipt.setPostTxState(ArrayUtils.EMPTY_BYTE_ARRAY);
+                receipt.setPostTxState(track.getRoot());
                 receipts.add(receipt);
                 summaries.add(summary);
             }
         } finally {
-            repository.rollback();
+            track.rollback();
         }
 
         return new BlockSummary(block, new HashMap<byte[], BigInteger>(), receipts, summaries);
@@ -242,9 +282,10 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
                 .startTracking();
 
         try {
-            org.ethereum.core.TransactionExecutor executor = commonConfig.transactionExecutor
+            org.ethereum.core.TransactionExecutor executor = new org.ethereum.core.TransactionExecutor
                     (tx, block.getCoinbase(), repository, worldManager.getBlockStore(),
                             programInvokeFactory, block, new EthereumListenerAdapter(), 0)
+                    .withCommonConfig(commonConfig)
                     .setLocalCall(true);
 
             executor.init();
@@ -261,7 +302,7 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
     @Override
     public ProgramResult callConstantFunction(String receiveAddress,
                                               CallTransaction.Function function, Object... funcArgs) {
-        return callConstantFunction(receiveAddress, ECKey.fromPrivate(new byte[32]), function, funcArgs);
+        return callConstantFunction(receiveAddress, ECKey.DUMMY, function, funcArgs);
     }
 
     @Override
@@ -281,15 +322,20 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
     }
 
     @Override
+    public org.ethereum.facade.Repository getLastRepositorySnapshot() {
+        return getSnapshotTo(getBlockchain().getBestBlock().getStateRoot());
+    }
+
+    @Override
     public org.ethereum.facade.Repository getPendingState() {
-        return (org.ethereum.facade.Repository) worldManager.getPendingState().getRepository();
+        return worldManager.getPendingState().getRepository();
     }
 
     @Override
     public org.ethereum.facade.Repository getSnapshotTo(byte[] root) {
 
         Repository repository = (Repository) worldManager.getRepository();
-        org.ethereum.facade.Repository snapshot = (org.ethereum.facade.Repository) repository.getSnapshotTo(root);
+        org.ethereum.facade.Repository snapshot = repository.getSnapshotTo(root);
 
         return snapshot;
     }
@@ -331,6 +377,17 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
     }
 
     @Override
+    public Integer getChainIdForNextBlock() {
+        BlockchainConfig nextBlockConfig = config.getBlockchainConfig().getConfigForBlock(getBlockchain()
+                .getBestBlock().getNumber() + 1);
+        return nextBlockConfig.getChainId();
+    }
+
+    public CompletableFuture<Void> switchToShortSync() {
+        return syncManager.switchToShortSync();
+    }
+
+    @Override
     public void exitOn(long number) {
         worldManager.getBlockchain().setExitOn(number);
     }
@@ -358,8 +415,8 @@ public class EthereumImpl implements Ethereum, SmartLifecycle {
      */
     @Override
     public void stop(Runnable callback) {
-        logger.info("### Shutdown initiated ### ");
-        close();
+        logger.info("Shutting down Ethereum instance...");
+        worldManager.close();
         callback.run();
     }
 

@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.jsontestsuite.suite;
 
 
@@ -49,6 +66,11 @@ public class RLPTestCase {
     }
 
     public void doEncode() {
+
+        if ("INVALID".equals(in) || "VALID".equals(in)) {
+            return;
+        }
+
         byte[] in = buildRLP(this.in);
         String expected = this.out.toLowerCase();
         String computed = Hex.toHexString(in);
@@ -57,9 +79,17 @@ public class RLPTestCase {
     }
 
     public void doDecode() {
+
         String out = this.out.toLowerCase();
-        RLPList list = RLP.decode2(Hex.decode(out));
-        checkRLPAgainstJson(list.get(0), in);
+
+        try {
+            RLPList list = RLP.decode2(Hex.decode(out));
+            checkRLPAgainstJson(list.get(0), in);
+        } catch (Exception e) {
+            if (!"INVALID".equals(in)){
+                throw e;
+            }
+        }
     }
 
     public byte[] buildRLP(Object in) {
@@ -84,6 +114,11 @@ public class RLPTestCase {
     }
 
     public void checkRLPAgainstJson(RLPElement element, Object in) {
+
+        if ("VALID".equals(in)) {
+            return;
+        }
+
         if (in instanceof List) {
             Object[] array = ((List) in).toArray();
             RLPList list = (RLPList) element;
@@ -104,10 +139,10 @@ public class RLPTestCase {
                 this.computed.add(computed.toString());
                 this.expected.add(expected.toString());
             } else {
-                String expected = new String(element.getRLPData() != null ? element.getRLPData() :
+                String computed = new String(element.getRLPData() != null ? element.getRLPData() :
                         new byte[0], StandardCharsets.UTF_8);
-                this.expected.add(expected);
-                this.computed.add(s);
+                this.expected.add(s);
+                this.computed.add(computed);
             }
         } else {
             throw new RuntimeException("Unexpected type: " + in.getClass());

@@ -1,9 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.samples;
 
 import org.ethereum.config.CommonConfig;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.Block;
-import org.ethereum.datasource.KeyValueDataSource;
+import org.ethereum.datasource.Source;
 import org.ethereum.db.IndexedBlockStore;
 
 import java.util.List;
@@ -14,12 +31,9 @@ import java.util.List;
 public class CheckFork {
     public static void main(String[] args) throws Exception {
         SystemProperties.getDefault().overrideParams("database.dir", "");
-        KeyValueDataSource index = CommonConfig.getDefault().keyValueDataSource();
-        index.setName("index");
-        index.init();
-        KeyValueDataSource blockDS = CommonConfig.getDefault().keyValueDataSource();
-        blockDS.setName("block");
-        blockDS.init();
+        Source<byte[], byte[]> index = CommonConfig.getDefault().cachedDbSource("index");
+        Source<byte[], byte[]> blockDS = CommonConfig.getDefault().cachedDbSource("block");
+
         IndexedBlockStore indexedBlockStore = new IndexedBlockStore();
         indexedBlockStore.init(index, blockDS);
 

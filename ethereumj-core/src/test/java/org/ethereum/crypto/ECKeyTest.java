@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.crypto;
 
 import com.google.common.collect.Lists;
@@ -23,7 +40,6 @@ import java.security.SecureRandom;
 import java.security.Security;
 import java.security.SignatureException;
 import java.util.List;
-import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -87,6 +103,12 @@ public class ECKeyTest {
             Security.getProvider("SunEC"),
             KeyPairGenerator.getInstance("RSA").generateKeyPair().getPrivate(),
             ECKey.fromPublicOnly(pubKey).getPubKeyPoint());
+        fail("Expecting an IllegalArgumentException for using an non EC private key");
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testInvalidPrivateKey2() throws Exception {
+        ECKey.fromPrivate(new byte[32]);
         fail("Expecting an IllegalArgumentException for using an non EC private key");
     }
 
@@ -185,7 +207,7 @@ public class ECKeyTest {
         BigInteger r = new BigInteger("28157690258821599598544026901946453245423343069728565040002908283498585537001");
         BigInteger s = new BigInteger("30212485197630673222315826773656074299979444367665131281281249560925428307087");
         ECDSASignature sig = ECDSASignature.fromComponents(r.toByteArray(), s.toByteArray(), (byte) 28);
-        key.verify(HashUtil.sha3(exampleMessage.getBytes()), sig);
+        assertFalse(key.verify(HashUtil.sha3(exampleMessage.getBytes()), sig));
     }
 
     @Test
@@ -221,7 +243,7 @@ public class ECKeyTest {
     @Test
     public void testVerifySignature3() throws SignatureException {
 
-        byte[] rawtx = Hex.decode("f86e80893635c9adc5dea000008609184e72a00082109f9479b08ad8787060333663d19704909ee7b1903e58801ba0899b92d0c76cbf18df24394996beef19c050baa9823b4a9828cd9b260c97112ea0c9e62eb4cf0a9d95ca35c8830afac567619d6b3ebee841a3c8be61d35acd8049");
+        byte[] rawtx = Hex.decode("f88080893635c9adc5dea000008609184e72a00094109f3535353535353535353535353535353535359479b08ad8787060333663d19704909ee7b1903e58801ba0899b92d0c76cbf18df24394996beef19c050baa9823b4a9828cd9b260c97112ea0c9e62eb4cf0a9d95ca35c8830afac567619d6b3ebee841a3c8be61d35acd8049");
 
         Transaction tx = new Transaction(rawtx);
         ECKey key = ECKey.signatureToKey(HashUtil.sha3(rawtx), tx.getSignature());
@@ -233,6 +255,22 @@ public class ECKeyTest {
         // todo: add test assertion when the sign/verify part actually works.
     }
 
+    @Test // result is a point at infinity
+    public void testVerifySignature4() {
+
+        byte[] hash = Hex.decode("acb1c19ac0832320815b5e886c6b73ad7d6177853d44b026f2a7a9e11bb899fc");
+        byte[] r = Hex.decode("89ea49159b334f9aebbf54481b69d000d285baa341899db355a4030f6838394e");
+        byte[] s = Hex.decode("540e9f9fa17bef441e32d98d5f4554cfefdc6a56101352e4b92efafd0d9646e8");
+        byte v = (byte) 28;
+
+        ECDSASignature sig = ECKey.ECDSASignature.fromComponents(r, s, v);
+
+        try {
+            ECKey.signatureToKey(hash, sig);
+            fail("Result is a point at infinity, recovery must fail");
+        } catch (SignatureException e) {
+        }
+    }
 
     @Test
     public void testSValue() throws Exception {
@@ -244,12 +282,7 @@ public class ECKeyTest {
         final ECKey key = new ECKey();
         for (byte i = 0; i < ITERATIONS; i++) {
             final byte[] hash = HashUtil.sha3(new byte[]{i});
-            sigFutures.add(executor.submit(new Callable<ECDSASignature>() {
-                @Override
-                public ECKey.ECDSASignature call() throws Exception {
-                    return key.doSign(hash);
-                }
-            }));
+            sigFutures.add(executor.submit(() -> key.doSign(hash)));
         }
         List<ECKey.ECDSASignature> sigs = Futures.allAsList(sigFutures).get();
         for (ECKey.ECDSASignature signature : sigs) {
@@ -285,7 +318,8 @@ public class ECKeyTest {
         if (provider != null) {
             testProviderRoundTrip(provider);
         } else {
-            System.out.println("Skip test as provider doesn't exist. Must be OpenJDK 1.7 which ships without 'SunEC'");
+            System.out.println("Skip test as provider doesn't exist. " +
+                    "Must be OpenJDK which could be shipped without 'SunEC'");
         }
     }
 

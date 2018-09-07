@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.server;
 
 import org.ethereum.config.SystemProperties;
@@ -15,10 +32,11 @@ import io.netty.handler.logging.LoggingHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.spongycastle.util.encoders.Hex;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
+
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * This class establishes a listener for incoming connections.
@@ -79,7 +97,7 @@ public class PeerServer {
 
             // Start the client.
             logger.info("Listening for incoming connections, port: [{}] ", port);
-            logger.info("NodeId: [{}] ", Hex.toHexString(config.nodeId()));
+            logger.info("NodeId: [{}] ", toHexString(config.nodeId()));
 
             channelFuture = b.bind(port).sync();
 
@@ -89,7 +107,7 @@ public class PeerServer {
             logger.debug("Connection is closed");
 
         } catch (Exception e) {
-            logger.debug("Exception: {} ({})", e.getMessage(), e.getClass().getName());
+            logger.error("Peer server error: {} ({})", e.getMessage(), e.getClass().getName());
             throw new Error("Server Disconnected");
         } finally {
             workerGroup.shutdownGracefully();

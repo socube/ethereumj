@@ -1,7 +1,25 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.net.eth.handler;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import org.ethereum.db.BlockStore;
 import org.ethereum.listener.EthereumListener;
 import org.ethereum.config.SystemProperties;
 import org.ethereum.core.*;
@@ -14,7 +32,6 @@ import org.ethereum.net.message.ReasonCode;
 import org.ethereum.net.server.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.List;
 
@@ -50,8 +67,6 @@ public abstract class EthHandler extends SimpleChannelInboundHandler<EthMessage>
         }
     };
 
-    protected int maxHashesAsk;
-
     protected boolean processTransactions = false;
 
     protected EthHandler(EthVersion version) {
@@ -59,16 +74,16 @@ public abstract class EthHandler extends SimpleChannelInboundHandler<EthMessage>
     }
 
     protected EthHandler(final EthVersion version, final SystemProperties config,
-                         final Blockchain blockchain, final CompositeEthereumListener ethereumListener) {
+                         final Blockchain blockchain, final BlockStore blockStore,
+                         final CompositeEthereumListener ethereumListener) {
         this.version = version;
         this.config = config;
         this.ethereumListener = ethereumListener;
         this.blockchain = blockchain;
-        maxHashesAsk = config.maxHashesAsk();
-        bestBlock = blockchain.getBestBlock();
+        bestBlock = blockStore.getBestBlock();
         this.ethereumListener.addListener(listener);
         // when sync enabled we delay transactions processing until sync is complete
-//        processTransactions = !config.isSyncEnabled();
+        processTransactions = !config.isSyncEnabled();
     }
 
     @Override
@@ -133,4 +148,5 @@ public abstract class EthHandler extends SimpleChannelInboundHandler<EthMessage>
     public EthVersion getVersion() {
         return version;
     }
+
 }

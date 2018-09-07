@@ -1,16 +1,35 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm;
 
 import org.ethereum.core.Bloom;
 import org.ethereum.crypto.HashUtil;
+import org.ethereum.datasource.MemSizeEstimator;
 import org.ethereum.util.RLP;
 import org.ethereum.util.RLPElement;
 import org.ethereum.util.RLPItem;
 import org.ethereum.util.RLPList;
 
-import org.spongycastle.util.encoders.Hex;
-
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.ethereum.datasource.MemSizeEstimator.ByteArrayEstimator;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * @author Roman Mandeleil
@@ -21,10 +40,6 @@ public class LogInfo {
     byte[] address = new byte[]{};
     List<DataWord> topics = new ArrayList<>();
     byte[] data = new byte[]{};
-    private boolean rejected = false;
-
-    /* Log info in encoded form */
-    private byte[] rlpEncoded;
 
     public LogInfo(byte[] rlp) {
 
@@ -40,10 +55,8 @@ public class LogInfo {
 
         for (RLPElement topic1 : topics) {
             byte[] topic = topic1.getRLPData();
-            this.topics.add(new DataWord(topic));
+            this.topics.add(DataWord.of(topic));
         }
-
-        rlpEncoded = rlp;
     }
 
     public LogInfo(byte[] address, List<DataWord> topics, byte[] data) {
@@ -84,14 +97,6 @@ public class LogInfo {
         return RLP.encodeList(addressEncoded, RLP.encodeList(topicsEncoded), dataEncoded);
     }
 
-    public boolean isRejected() {
-        return rejected;
-    }
-
-    public void reject() {
-        this.rejected = true;
-    }
-
     public Bloom getBloom() {
         Bloom ret = Bloom.create(HashUtil.sha3(address));
         for (DataWord topic : topics) {
@@ -108,18 +113,21 @@ public class LogInfo {
         topicsStr.append("[");
 
         for (DataWord topic : topics) {
-            String topicStr = Hex.toHexString(topic.getData());
+            String topicStr = toHexString(topic.getData());
             topicsStr.append(topicStr).append(" ");
         }
         topicsStr.append("]");
 
 
         return "LogInfo{" +
-                "address=" + Hex.toHexString(address) +
+                "address=" + toHexString(address) +
                 ", topics=" + topicsStr +
-                ", data=" + Hex.toHexString(data) +
+                ", data=" + toHexString(data) +
                 '}';
     }
 
-
+    public static final MemSizeEstimator<LogInfo> MemEstimator = log ->
+            ByteArrayEstimator.estimateSize(log.address) +
+            ByteArrayEstimator.estimateSize(log.data) +
+            log.topics.size() * DataWord.MEM_SIZE + 16;
 }

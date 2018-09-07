@@ -1,3 +1,20 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.samples;
 
 import com.google.common.base.Joiner;
@@ -76,40 +93,36 @@ public class PrivateNetworkDiscoverySample {
                 NodeManager nodeManager;
 
                 {
-                    new Thread(new Runnable() {
-
-                        @Override
-                        public void run() {
-                            try {
-                                Thread.sleep(5000);
-                                while (true) {
-                                    if (logger != null) {
-                                        Thread.sleep(15000);
-                                        if (channelManager != null) {
-                                            final Collection<Channel> activePeers = channelManager.getActivePeers();
-                                            final ArrayList<String> ports = new ArrayList<>();
-                                            for (Channel channel: activePeers) {
-                                                ports.add(channel.getInetSocketAddress().getHostName() + ":" + channel.getInetSocketAddress().getPort());
-                                            }
-
-                                            final Collection<NodeEntry> nodes = nodeManager.getTable().getAllNodes();
-                                            final ArrayList<String> nodesString = new ArrayList<>();
-                                            for (NodeEntry node: nodes) {
-                                                nodesString.add(node.getNode().getHost() + ":" + node.getNode().getPort() + "@" + node.getNode().getHexId().substring(0, 6) );
-                                            }
-
-                                            logger.info("channelManager.getActivePeers() " + activePeers.size() + " " + Joiner.on(", ").join(ports));
-                                            logger.info("nodeManager.getTable().getAllNodes() " + nodesString.size() + " " + Joiner.on(", ").join(nodesString));
-                                        } else {
-                                            logger.info("Channel manager is null");
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(5000);
+                            while (true) {
+                                if (logger != null) {
+                                    Thread.sleep(15000);
+                                    if (channelManager != null) {
+                                        final Collection<Channel> activePeers = channelManager.getActivePeers();
+                                        final ArrayList<String> ports = new ArrayList<>();
+                                        for (Channel channel: activePeers) {
+                                            ports.add(channel.getInetSocketAddress().getHostName() + ":" + channel.getInetSocketAddress().getPort());
                                         }
+
+                                        final Collection<NodeEntry> nodes = nodeManager.getTable().getAllNodes();
+                                        final ArrayList<String> nodesString = new ArrayList<>();
+                                        for (NodeEntry node: nodes) {
+                                            nodesString.add(node.getNode().getHost() + ":" + node.getNode().getPort() + "@" + node.getNode().getHexId().substring(0, 6) );
+                                        }
+
+                                        logger.info("channelManager.getActivePeers() " + activePeers.size() + " " + Joiner.on(", ").join(ports));
+                                        logger.info("nodeManager.getTable().getAllNodes() " + nodesString.size() + " " + Joiner.on(", ").join(nodesString));
                                     } else {
-                                        System.err.println("Logger is null for " + nodeIndex);
+                                        logger.info("Channel manager is null");
                                     }
+                                } else {
+                                    System.err.println("Logger is null for " + nodeIndex);
                                 }
-                            } catch (Exception e) {
-                                logger.error("Error checking peers count: ", e);
                             }
+                        } catch (Exception e) {
+                            logger.error("Error checking peers count: ", e);
                         }
                     }).start();
                 }

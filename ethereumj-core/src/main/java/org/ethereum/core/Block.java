@@ -1,6 +1,24 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.core;
 
 import org.ethereum.crypto.HashUtil;
+import org.ethereum.datasource.MemSizeEstimator;
 import org.ethereum.trie.Trie;
 import org.ethereum.trie.TrieImpl;
 import org.ethereum.util.*;
@@ -15,6 +33,8 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.ethereum.crypto.HashUtil.sha3;
+import static org.ethereum.datasource.MemSizeEstimator.ByteArrayEstimator;
+import static org.ethereum.util.ByteUtil.toHexString;
 
 /**
  * The block in Ethereum is the collection of relevant pieces of information
@@ -44,16 +64,13 @@ public class Block {
     private byte[] rlpEncoded;
     private boolean parsed = false;
 
-    private Trie<byte[]> txsState;
-
-
     /* Constructors */
 
     private Block() {
     }
 
     public Block(byte[] rawData) {
-        logger.debug("new from [" + Hex.toHexString(rawData) + "]");
+        logger.debug("new from [" + toHexString(rawData) + "]");
         this.rlpEncoded = rawData;
     }
 
@@ -132,7 +149,7 @@ public class Block {
 
         // Parse Transactions
         RLPList txTransactions = (RLPList) block.get(1);
-        this.parseTxs(this.header.getTxTrieRoot(), txTransactions);
+        this.parseTxs(this.header.getTxTrieRoot(), txTransactions, false);
 
         // Parse Uncles
         RLPList uncleBlocks = (RLPList) block.get(2);
@@ -288,9 +305,8 @@ public class Block {
         parseRLP();
 
         toStringBuff.setLength(0);
-        toStringBuff.append(Hex.toHexString(this.getEncoded())).append("\n");
+        toStringBuff.append(toHexString(this.getEncoded())).append("\n");
         toStringBuff.append("BlockData [ ");
-        toStringBuff.append("hash=").append(ByteUtil.toHexString(this.getHash())).append("\n");
         toStringBuff.append(header.toString());
 
         if (!getUncleList().isEmpty()) {
@@ -323,7 +339,6 @@ public class Block {
 
         toStringBuff.setLength(0);
         toStringBuff.append("BlockData [");
-        toStringBuff.append("hash=").append(ByteUtil.toHexString(this.getHash()));
         toStringBuff.append(header.toFlatString());
 
         for (Transaction tx : getTransactionsList()) {
@@ -335,21 +350,24 @@ public class Block {
         return toStringBuff.toString();
     }
 
-    private void parseTxs(RLPList txTransactions) {
+    private byte[] parseTxs(RLPList txTransactions, boolean validate) {
 
-        this.txsState = new TrieImpl();
+        Trie<byte[]> txsState = new TrieImpl();
         for (int i = 0; i < txTransactions.size(); i++) {
             RLPElement transactionRaw = txTransactions.get(i);
-            this.transactionsList.add(new Transaction(transactionRaw.getRLPData()));
-            this.txsState.put(RLP.encodeInt(i), transactionRaw.getRLPData());
+            Transaction tx = new Transaction(transactionRaw.getRLPData());
+            if (validate) tx.verify();
+            this.transactionsList.add(tx);
+            txsState.put(RLP.encodeInt(i), transactionRaw.getRLPData());
         }
+        return txsState.getRootHash();
     }
 
 
-    private boolean parseTxs(byte[] expectedRoot, RLPList txTransactions) {
+    private boolean parseTxs(byte[] expectedRoot, RLPList txTransactions, boolean validate) {
 
-        parseTxs(txTransactions);
-        String calculatedRoot = Hex.toHexString(txsState.getRootHash());
+        byte[] rootHash = parseTxs(txTransactions, validate);
+        String calculatedRoot = Hex.toHexString(rootHash);
         if (!calculatedRoot.equals(Hex.toHexString(expectedRoot))) {
             logger.debug("Transactions trie root validation failed for block #{}", this.header.getNumber());
             return false;
@@ -481,7 +499,7 @@ public class Block {
             RLPList transactions = (RLPList) items.get(0);
             RLPList uncles = (RLPList) items.get(1);
 
-            if (!block.parseTxs(header.getTxTrieRoot(), transactions)) {
+            if (!block.parseTxs(header.getTxTrieRoot(), transactions, false)) {
                 return null;
             }
 
@@ -500,4 +518,15 @@ public class Block {
             return block;
         }
     }
+
+    public static final MemSizeEstimator<Block> MemEstimator = block -> {
+        if (block == null) return 0;
+        long txSize = block.transactionsList.stream().mapToLong(Transaction.MemEstimator::estimateSize).sum() + 16;
+        return BlockHeader.MAX_HEADER_SIZE +
+                block.uncleList.size() * BlockHeader.MAX_HEADER_SIZE + 16 +
+                txSize +
+                ByteArrayEstimator.estimateSize(block.rlpEncoded) +
+                1 + // parsed flag
+                16; // Object header + ref
+    };
 }

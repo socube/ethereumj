@@ -1,29 +1,36 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.config.net;
 
-import org.apache.commons.lang3.tuple.Pair;
 import org.ethereum.config.blockchain.Eip150HFConfig;
+import org.ethereum.config.blockchain.Eip160HFConfig;
 import org.ethereum.config.blockchain.MordenConfig;
-import org.spongycastle.util.encoders.Hex;
-
-import java.util.Collections;
-import java.util.List;
 
 /**
  * Created by Anton Nashatyrev on 25.02.2016.
  */
-public class MordenNetConfig extends AbstractNetConfig {
-    private static final long EIP150_HF_BLOCK = 1_783_000;
-    private static final byte[] EIP150_HF_BLOCK_HASH =
-            Hex.decode("f376243aeff1f256d970714c3de9fd78fa4e63cf63e32a51fe1169e375d98145");
+public class MordenNetConfig extends BaseNetConfig {
 
     public MordenNetConfig() {
         add(0, new MordenConfig.Frontier());
         add(494_000, new MordenConfig.Homestead());
-        add(EIP150_HF_BLOCK, new Eip150HFConfig(new MordenConfig.Homestead()) {
-            @Override
-            public List<Pair<Long, byte[]>> blockHashConstraints() {
-                return Collections.singletonList(Pair.of(EIP150_HF_BLOCK, EIP150_HF_BLOCK_HASH));
-            }
-        });
+        add(1_783_000, new Eip150HFConfig(new MordenConfig.Homestead()));
+        add(1_885_000, new Eip160HFConfig(new MordenConfig.Homestead()));
+
     }
 }

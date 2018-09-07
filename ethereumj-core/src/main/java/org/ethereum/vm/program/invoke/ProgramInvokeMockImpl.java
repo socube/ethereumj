@@ -1,9 +1,26 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.vm.program.invoke;
 
 import org.ethereum.core.Repository;
 import org.ethereum.crypto.ECKey;
 import org.ethereum.crypto.HashUtil;
-import org.ethereum.datasource.MapDB;
+import org.ethereum.datasource.inmem.HashMapDB;
 import org.ethereum.db.RepositoryRoot;
 import org.ethereum.db.BlockStore;
 import org.ethereum.db.BlockStoreDummy;
@@ -34,7 +51,7 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     public ProgramInvokeMockImpl() {
 
 
-        this.repository = new RepositoryRoot(new MapDB<byte[]>());
+        this.repository = new RepositoryRoot(new HashMapDB<byte[]>());
         this.repository.createAccount(ownerAddress);
 
         this.repository.createAccount(contractAddress);
@@ -53,13 +70,13 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
 
     /*           ADDRESS op         */
     public DataWord getOwnerAddress() {
-        return new DataWord(ownerAddress);
+        return DataWord.of(ownerAddress);
     }
 
     /*           BALANCE op         */
     public DataWord getBalance() {
         byte[] balance = Hex.decode("0DE0B6B3A7640000");
-        return new DataWord(balance);
+        return DataWord.of(balance);
     }
 
     /*           ORIGIN op         */
@@ -68,7 +85,7 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
         byte[] cowPrivKey = HashUtil.sha3("horse".getBytes());
         byte[] addr = ECKey.fromPrivate(cowPrivKey).getAddress();
 
-        return new DataWord(addr);
+        return DataWord.of(addr);
     }
 
     /*           CALLER op         */
@@ -77,20 +94,20 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
         byte[] cowPrivKey = HashUtil.sha3("monkey".getBytes());
         byte[] addr = ECKey.fromPrivate(cowPrivKey).getAddress();
 
-        return new DataWord(addr);
+        return DataWord.of(addr);
     }
 
     /*           GASPRICE op       */
     public DataWord getMinGasPrice() {
 
         byte[] minGasPrice = Hex.decode("09184e72a000");
-        return new DataWord(minGasPrice);
+        return DataWord.of(minGasPrice);
     }
 
     /*           GAS op       */
     public DataWord getGas() {
 
-        return new DataWord(gasLimit);
+        return DataWord.of(gasLimit);
     }
 
     @Override
@@ -105,7 +122,7 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     /*          CALLVALUE op    */
     public DataWord getCallValue() {
         byte[] balance = Hex.decode("0DE0B6B3A7640000");
-        return new DataWord(balance);
+        return DataWord.of(balance);
     }
 
     /*****************/
@@ -122,21 +139,21 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
         int index = indexData.value().intValue();
         int size = 32;
 
-        if (msgData == null) return new DataWord(data);
-        if (index > msgData.length) return new DataWord(data);
+        if (msgData == null) return DataWord.of(data);
+        if (index > msgData.length) return DataWord.of(data);
         if (index + 32 > msgData.length) size = msgData.length - index;
 
         System.arraycopy(msgData, index, data, 0, size);
 
-        return new DataWord(data);
+        return DataWord.of(data);
     }
 
     /*  CALLDATASIZE */
     public DataWord getDataSize() {
 
-        if (msgData == null || msgData.length == 0) return new DataWord(new byte[32]);
+        if (msgData == null || msgData.length == 0) return DataWord.of(new byte[32]);
         int size = msgData.length;
-        return new DataWord(size);
+        return DataWord.of(size);
     }
 
     /*  CALLDATACOPY */
@@ -159,36 +176,36 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     @Override
     public DataWord getPrevHash() {
         byte[] prevHash = Hex.decode("961CB117ABA86D1E596854015A1483323F18883C2D745B0BC03E87F146D2BB1C");
-        return new DataWord(prevHash);
+        return DataWord.of(prevHash);
     }
 
     @Override
     public DataWord getCoinbase() {
         byte[] coinBase = Hex.decode("E559DE5527492BCB42EC68D07DF0742A98EC3F1E");
-        return new DataWord(coinBase);
+        return DataWord.of(coinBase);
     }
 
     @Override
     public DataWord getTimestamp() {
         long timestamp = 1401421348;
-        return new DataWord(timestamp);
+        return DataWord.of(timestamp);
     }
 
     @Override
     public DataWord getNumber() {
         long number = 33;
-        return new DataWord(number);
+        return DataWord.of(number);
     }
 
     @Override
     public DataWord getDifficulty() {
         byte[] difficulty = Hex.decode("3ED290");
-        return new DataWord(difficulty);
+        return DataWord.of(difficulty);
     }
 
     @Override
     public DataWord getGaslimit() {
-        return new DataWord(gasLimit);
+        return DataWord.of(gasLimit);
     }
 
     public void setGasLimit(long gasLimit) {
@@ -202,6 +219,11 @@ public class ProgramInvokeMockImpl implements ProgramInvoke {
     @Override
     public boolean byTransaction() {
         return true;
+    }
+
+    @Override
+    public boolean isStaticCall() {
+        return false;
     }
 
     @Override

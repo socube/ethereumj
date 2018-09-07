@@ -1,7 +1,25 @@
+/*
+ * Copyright (c) [2016] [ <ether.camp> ]
+ * This file is part of the ethereumJ library.
+ *
+ * The ethereumJ library is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * The ethereumJ library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with the ethereumJ library. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.ethereum.datasource;
 
 import org.ethereum.core.AccountState;
 import org.ethereum.core.Repository;
+import org.ethereum.datasource.inmem.HashMapDB;
 import org.ethereum.db.RepositoryRoot;
 import org.ethereum.vm.DataWord;
 import org.junit.Assert;
@@ -22,7 +40,7 @@ public class RepoNewTest {
     @Test
     public void test1() throws Exception {
 
-        MapDB<byte[]> stateDb = new MapDB<>();
+        Source<byte[], byte[]> stateDb = new NoDeleteSource<>(new HashMapDB<byte[]>());
         RepositoryRoot repo = new RepositoryRoot(stateDb, null);
         byte[] addr1 = decode("aaaa");
         byte[] addr2 = decode("bbbb");
@@ -35,7 +53,7 @@ public class RepoNewTest {
         System.out.println(repo.dumpStateTrie());
 
         System.out.println("Root: " + toHexString(root1));
-        System.out.println("Storage size: " + stateDb.getStorage().size());
+//        System.out.println("Storage size: " + stateDb.getStorage().size());
 
         RepositoryRoot repo1 = new RepositoryRoot(stateDb, root1);
         Assert.assertEquals(repo1.getBalance(addr1), valueOf(1));
@@ -46,9 +64,10 @@ public class RepoNewTest {
         byte[] root2 = repo.getRoot();
 
         System.out.println("Root: " + toHexString(root2));
-        System.out.println("Storage size: " + stateDb.getStorage().size());
+//        System.out.println("Storage size: " + stateDb.getStorage().size());
 
         RepositoryRoot repo2 = new RepositoryRoot(stateDb, root1);
+        System.out.println(repo2.dumpStateTrie());
         Assert.assertEquals(repo2.getBalance(addr1), valueOf(1));
         Assert.assertEquals(repo2.getBalance(addr2), valueOf(10));
 
@@ -132,46 +151,46 @@ public class RepoNewTest {
 
     @Test
     public void testStorage1() throws Exception {
-        MapDB<byte[]> stateDb = new MapDB<>();
+        HashMapDB<byte[]> stateDb = new HashMapDB<>();
         RepositoryRoot repo = new RepositoryRoot(stateDb, null);
         byte[] addr1 = decode("aaaa");
         repo.createAccount(addr1);
-        repo.addStorageRow(addr1, new DataWord(1), new DataWord(111));
+        repo.addStorageRow(addr1, DataWord.ONE, DataWord.of(111));
         repo.commit();
 
         byte[] root1 = repo.getRoot();
         System.out.println(repo.dumpStateTrie());
 
         RepositoryRoot repo2 = new RepositoryRoot(stateDb, root1);
-        DataWord val1 = repo.getStorageValue(addr1, new DataWord(1));
-        assert new DataWord(111).equals(val1);
+        DataWord val1 = repo.getStorageValue(addr1, DataWord.ONE);
+        assert DataWord.of(111).equals(val1);
 
         Repository repo3 = repo2.startTracking();
-        repo3.addStorageRow(addr1, new DataWord(2), new DataWord(222));
-        repo3.addStorageRow(addr1, new DataWord(1), new DataWord(333));
-        assert new DataWord(333).equals(repo3.getStorageValue(addr1, new DataWord(1)));
-        assert new DataWord(222).equals(repo3.getStorageValue(addr1, new DataWord(2)));
-        assert new DataWord(111).equals(repo2.getStorageValue(addr1, new DataWord(1)));
-        Assert.assertNull(repo2.getStorageValue(addr1, new DataWord(2)));
+        repo3.addStorageRow(addr1, DataWord.of(2), DataWord.of(222));
+        repo3.addStorageRow(addr1, DataWord.ONE, DataWord.of(333));
+        assert DataWord.of(333).equals(repo3.getStorageValue(addr1, DataWord.ONE));
+        assert DataWord.of(222).equals(repo3.getStorageValue(addr1, DataWord.of(2)));
+        assert DataWord.of(111).equals(repo2.getStorageValue(addr1, DataWord.ONE));
+        Assert.assertNull(repo2.getStorageValue(addr1, DataWord.of(2)));
         repo3.commit();
-        assert new DataWord(333).equals(repo2.getStorageValue(addr1, new DataWord(1)));
-        assert new DataWord(222).equals(repo2.getStorageValue(addr1, new DataWord(2)));
+        assert DataWord.of(333).equals(repo2.getStorageValue(addr1, DataWord.ONE));
+        assert DataWord.of(222).equals(repo2.getStorageValue(addr1, DataWord.of(2)));
         repo2.commit();
 
         RepositoryRoot repo4 = new RepositoryRoot(stateDb, repo2.getRoot());
-        assert new DataWord(333).equals(repo4.getStorageValue(addr1, new DataWord(1)));
-        assert new DataWord(222).equals(repo4.getStorageValue(addr1, new DataWord(2)));
+        assert DataWord.of(333).equals(repo4.getStorageValue(addr1, DataWord.ONE));
+        assert DataWord.of(222).equals(repo4.getStorageValue(addr1, DataWord.of(2)));
     }
 
     @Test
     public void testStorage2() throws Exception {
-        RepositoryRoot repo = new RepositoryRoot(new MapDB<byte[]>());
+        RepositoryRoot repo = new RepositoryRoot(new HashMapDB<byte[]>());
 
         Repository repo1 = repo.startTracking();
         byte[] addr2 = decode("bbbb");
-        repo1.addStorageRow(addr2, new DataWord(1), new DataWord(111));
+        repo1.addStorageRow(addr2, DataWord.ONE, DataWord.of(111));
         repo1.commit();
 
-        Assert.assertEquals(new DataWord(111), repo.getStorageValue(addr2, new DataWord(1)));
+        Assert.assertEquals(DataWord.of(111), repo.getStorageValue(addr2, DataWord.ONE));
     }
 }
